@@ -1,0 +1,12 @@
+.playwright-profiles/
+receipts/inbox/
+receipts/processed/
+debug/
+*.log
+ledger.sqlite
+.env
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+.claude/

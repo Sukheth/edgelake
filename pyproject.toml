@@ -1,0 +1,22 @@
+[project]
+name = "edgelake"
+version = "0.1.0"
+description = "Auto-file Swiggy/Blinkit receipts to Chrome River via Playwright"
+requires-python = ">=3.11"
+dependencies = [
+    "playwright>=1.47",
+    "pdfplumber>=0.11",
+    "click>=8.1",
+    "python-dotenv>=1.0",
+    "rich>=13.7",
+]
+
+[project.scripts]
+edgelake = "edgelake.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["edgelake*"]
