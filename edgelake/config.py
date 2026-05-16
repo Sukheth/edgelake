@@ -15,8 +15,11 @@ DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "INR")
 DEFAULT_LOCATION = os.getenv("DEFAULT_LOCATION", "India")
 DEFAULT_PROJECT_CODE = os.getenv("DEFAULT_PROJECT_CODE", "")
 
+BLINKIT_URL = os.getenv("BLINKIT_URL", "https://blinkit.com/account/orders")
+
 INBOX = ROOT / "receipts" / "inbox"
 PROCESSED = ROOT / "receipts" / "processed"
 PROFILE_DIR = ROOT / ".playwright-profiles" / "chromeriver"
+BLINKIT_PROFILE_DIR = ROOT / ".playwright-profiles" / "blinkit"
 DEBUG_DIR = ROOT / "debug"
 LEDGER_PATH = ROOT / "ledger.sqlite"

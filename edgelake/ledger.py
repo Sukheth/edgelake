@@ -25,7 +25,36 @@ def _conn() -> sqlite3.Connection:
         )
         """
     )
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS fetch_state (
+            merchant TEXT PRIMARY KEY,
+            last_fetched_at TEXT NOT NULL,
+            last_order_id TEXT
+        )
+        """
+    )
     return conn
+
+
+def get_last_fetched(merchant: str) -> str | None:
+    with _conn() as conn:
+        row = conn.execute(
+            "SELECT last_fetched_at FROM fetch_state WHERE merchant = ?",
+            (merchant,),
+        ).fetchone()
+    return row[0] if row else None
+
+
+def set_last_fetched(merchant: str, ts_iso: str, last_order_id: str | None = None) -> None:
+    with _conn() as conn:
+        conn.execute(
+            """
+            INSERT OR REPLACE INTO fetch_state (merchant, last_fetched_at, last_order_id)
+            VALUES (?, ?, ?)
+            """,
+            (merchant, ts_iso, last_order_id),
+        )
 
 
 def hash_file(path: Path) -> str:

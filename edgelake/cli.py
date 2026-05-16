@@ -10,7 +10,14 @@ from rich.table import Table
 from .config import INBOX, PROCESSED
 from .emburse.session import chromeriver_session
 from .emburse.uploader import create_report, upload_draft
-from .ledger import already_drafted, hash_file, record
+from .fetchers import blinkit as blinkit_fetcher
+from .ledger import (
+    already_drafted,
+    get_last_fetched,
+    hash_file,
+    record,
+    set_last_fetched,
+)
 from .parsers.pdf import parse_pdf
 
 console = Console()
@@ -129,6 +136,36 @@ def upload(directory: Path | None, dry_run: bool) -> None:
         pdf.rename(target)
         console.print(f"[dim]  moved -> {target.relative_to(PROCESSED.parent)}[/dim]")
     console.print(f"[green]Recorded {len(parsed)} receipt(s) as drafted.[/green]")
+
+
+@main.command()
+@click.option("--merchant", type=click.Choice(["blinkit"]), default="blinkit",
+              help="Which merchant to fetch from (only blinkit supported for now).")
+@click.option("--since", "since", default=None,
+              help="ISO date/time cutoff. Defaults to last successful fetch (or all if first run).")
+def fetch(merchant: str, since: str | None) -> None:
+    """Download invoice PDFs from a merchant into receipts/inbox/."""
+    since_iso = since or get_last_fetched(merchant)
+    if since_iso:
+        console.print(f"[cyan]Since cutoff:[/cyan] {since_iso}")
+    else:
+        console.print("[cyan]No prior fetch on record — pulling everything available.[/cyan]")
+
+    from datetime import datetime
+    run_started = datetime.utcnow().isoformat()
+
+    if merchant == "blinkit":
+        n = blinkit_fetcher.fetch(since_iso)
+    else:
+        console.print(f"[red]Unsupported merchant: {merchant}[/red]")
+        return
+
+    console.print(f"[green]Fetched {n} PDF(s).[/green]")
+    # Only advance the watermark if at least one file came down, so a failed
+    # discovery run doesn't silently skip a real backlog.
+    if n > 0:
+        set_last_fetched(merchant, run_started)
+        console.print(f"[dim]  watermark set: {merchant} -> {run_started}[/dim]")
 
 
 if __name__ == "__main__":

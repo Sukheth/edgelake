@@ -1,8 +1,11 @@
 .playwright-profiles/
 receipts/inbox/
 receipts/processed/
+receipts/
 debug/
 *.log
+*.pdf
+*.png
 ledger.sqlite
 .env
 __pycache__/
