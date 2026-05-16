@@ -312,6 +312,80 @@ def _debug_dump_phrase(page: Page) -> None:
     )
 
 
+def _load_all_orders(
+    page: Page,
+    since_dt: datetime | None = None,
+    ref_year: int | None = None,
+    max_passes: int = 25,
+) -> list[dict]:
+    """Scroll the orders listing and click any 'Load more' / 'Show more' button
+    until the rendered row count stops growing. Blinkit paginates the listing,
+    so without this we only see ~10 most-recent orders.
+
+    If `since_dt` is given, stop early once the oldest visible row is already
+    before the cutoff — no point loading history we'd skip anyway."""
+    last_count = -1
+    stable_passes = 0
+    rows: list[dict] = []
+    for pass_i in range(max_passes):
+        rows = _enumerate_orders(page)
+        count = len(rows)
+
+        # Early stop: if we have at least one row older than the cutoff, all
+        # further pagination is wasted work — rows load newest-first.
+        if since_dt and ref_year is not None and rows:
+            oldest = None
+            for r in rows:
+                rd = _parse_row_date(r.get("date") or "", ref_year)
+                if rd and (oldest is None or rd < oldest):
+                    oldest = rd
+            if oldest and oldest < since_dt:
+                console.print(
+                    f"[dim]  load: oldest visible {oldest.isoformat()} < cutoff, stopping at {count} rows[/dim]"
+                )
+                return rows
+
+        if count == last_count:
+            stable_passes += 1
+            if stable_passes >= 2:
+                console.print(f"[dim]  load: stable at {count} rows after {pass_i+1} passes[/dim]")
+                return rows
+        else:
+            stable_passes = 0
+            console.print(f"[dim]  load: pass {pass_i+1} -> {count} rows[/dim]")
+        last_count = count
+
+        # Try a "Load more" / "Show more" / "View more" button first.
+        clicked_more = False
+        for sel in [
+            'button:has-text("Load more")',
+            'button:has-text("Show more")',
+            'button:has-text("View more")',
+            'a:has-text("Load more")',
+            'a:has-text("Show more")',
+        ]:
+            try:
+                loc = page.locator(sel).first
+                if loc.is_visible(timeout=300):
+                    loc.click(timeout=2000)
+                    clicked_more = True
+                    page.wait_for_timeout(800)
+                    break
+            except Exception:
+                continue
+
+        # Always also scroll to the bottom to trigger infinite-scroll loaders.
+        try:
+            page.evaluate("() => window.scrollTo(0, document.body.scrollHeight)")
+        except Exception:
+            pass
+        # Brief wait for new rows to render.
+        page.wait_for_timeout(600 if clicked_more else 900)
+
+    console.print(f"[yellow]  load: hit max_passes={max_passes} without stabilizing[/yellow]")
+    return rows
+
+
 def _enumerate_orders(page: Page) -> list[dict]:
     """Each order row contains 'Arrived in N minutes' as a small header.
     Find the LEAF element that has that exact phrase (no children with the
@@ -369,12 +443,15 @@ def _enumerate_orders(page: Page) -> list[dict]:
             // before a number that's separated from the date.
             const amtMatch = full.match(/(?:\\u20B9|Rs\\.?|\\?|\\u00A3)\\s*([0-9]+(?:,[0-9]{3})*(?:\\.[0-9]{1,2})?)/);
             const dateMatch = full.match(/(\\d{1,2}\\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[^,]*(?:,\\s*\\d{1,2}:\\d{2}\\s*(?:am|pm))?)/i);
+            // r.x / r.y are VIEWPORT-relative. Store document-relative y so
+            // we can scroll the row back into view later (page.goto resets
+            // scroll, but the row's document position is stable).
             rows.push({
               id: idMatch[1],
               amount: amtMatch ? amtMatch[1] : '',
               date: dateMatch ? dateMatch[1] : '',
               x: Math.round(r.x + r.width / 2),
-              y: Math.round(r.y + r.height / 2),
+              y: Math.round(r.y + window.scrollY + r.height / 2),
               w: Math.round(r.width),
               h: Math.round(r.height),
               text_sample: full.slice(0, 160),
@@ -425,9 +502,18 @@ def _dump_invoice_candidates(page: Page) -> list[dict]:
     )
 
 
-def _try_download_invoice(page: Page, dest_dir: Path, order_id: str) -> Path | None:
+def _try_download_invoice(
+    page: Page,
+    dest_dir: Path,
+    order_id: str,
+    have: set[str] | None = None,
+) -> Path | None:
     """Best-effort: look for an Invoice/Download Invoice control and capture
-    the resulting download. Returns the saved path or None."""
+    the resulting download. Returns the saved path or None.
+
+    If `have` is supplied, the suggested filename is checked against it
+    BEFORE saving — so if the same invoice file already exists on disk we
+    don't write a duplicate copy with a `_<order_id>` suffix."""
     selectors = [
         'a:has-text("Download Invoice")',
         'button:has-text("Download Invoice")',
@@ -436,28 +522,55 @@ def _try_download_invoice(page: Page, dest_dir: Path, order_id: str) -> Path | N
         'a[href*="invoice" i]',
         'a[href$=".pdf"]',
     ]
-    for sel in selectors:
-        try:
-            loc = page.locator(sel).first
-            if not loc.is_visible(timeout=1500):
+    # Poll until ANY of the selectors appears (up to 4s total) — much faster
+    # than serially asking each one with a 1.5s timeout.
+    deadline = time.monotonic() + 4.0
+    matched_sel: str | None = None
+    while time.monotonic() < deadline and matched_sel is None:
+        for sel in selectors:
+            try:
+                if page.locator(sel).first.is_visible(timeout=200):
+                    matched_sel = sel
+                    break
+            except Exception:
                 continue
-        except Exception:
-            continue
-        try:
-            with page.expect_download(timeout=15000) as dl_info:
-                loc.click(timeout=4000)
-            dl = dl_info.value
-            suggested = dl.suggested_filename or f"blinkit_{order_id}.pdf"
-            target = dest_dir / suggested
-            if target.exists():
-                target = dest_dir / f"{Path(suggested).stem}_{order_id}{Path(suggested).suffix}"
-            dl.save_as(str(target))
-            console.print(f"[green]  downloaded:[/green] {target.name}")
-            return target
-        except Exception as e:
-            console.print(f"[yellow]  invoice click via {sel} failed: {e}[/yellow]")
-            continue
-    return None
+        if matched_sel is None:
+            page.wait_for_timeout(150)
+    if matched_sel is None:
+        console.print("[yellow]  no Download Invoice control found on detail page[/yellow]")
+        return None
+    try:
+        with page.expect_download(timeout=15000) as dl_info:
+            page.locator(matched_sel).first.click(timeout=3000)
+        dl = dl_info.value
+        suggested = dl.suggested_filename or f"blinkit_{order_id}.pdf"
+
+        # If the suggested filename is already on disk OR in our `have` set,
+        # skip without writing — same invoice, different short id on listing.
+        if have is not None and suggested in have:
+            try:
+                dl.cancel()
+            except Exception:
+                pass
+            console.print(f"[dim]  already have {suggested}, skipping save[/dim]")
+            return None
+
+        target = dest_dir / suggested
+        if target.exists():
+            # File on disk but not in `have` (somehow). Treat as dedup.
+            try:
+                dl.cancel()
+            except Exception:
+                pass
+            console.print(f"[dim]  {suggested} already on disk, skipping save[/dim]")
+            return None
+
+        dl.save_as(str(target))
+        console.print(f"[green]  downloaded:[/green] {target.name}")
+        return target
+    except Exception as e:
+        console.print(f"[yellow]  invoice click via {matched_sel} failed: {e}[/yellow]")
+        return None
 
 
 _MONTHS = {
@@ -492,15 +605,75 @@ def _parse_row_date(date_str: str, ref_year: int) -> datetime | None:
         return None
 
 
+def _parse_row_time(date_str: str) -> str:
+    """Extract HHMM (24h) from a row date like '14 May, 2:30 pm'. Empty on miss."""
+    if not date_str:
+        return ""
+    import re
+    m = re.search(r"(\d{1,2}):(\d{2})\s*(am|pm)", date_str, re.IGNORECASE)
+    if not m:
+        return ""
+    hh, mm, ampm = m.group(1), m.group(2), m.group(3).lower()
+    hour = int(hh) % 12
+    if ampm == "pm":
+        hour += 12
+    return f"{hour:02d}{mm}"
+
+
+def _rename_blinkit_pdf(saved: Path, row: dict, ref_year: int) -> Path:
+    """Rename a freshly-downloaded Blinkit invoice to:
+        Blinkit_<ORDERID>_<YYYY-MM-DD>_<HHMM>_<AMOUNT>.pdf
+    Order ID comes from the existing filename (which Blinkit names ForwardInvoice_ORD<digits>.pdf).
+    Date+time come from the row text; amount comes from parsing the PDF.
+    Falls back to leaving the file alone if anything required is missing."""
+    # 1. Pull ORD<digits> out of the current filename — that's our canonical id.
+    stem = saved.stem
+    order_id = ""
+    if "ORD" in stem:
+        order_id = stem[stem.index("ORD"):].split("_")[0]
+    if not order_id:
+        return saved  # nothing to anchor on; leave as-is
+
+    # 2. Date from the row.
+    row_dt = _parse_row_date(row.get("date") or "", ref_year)
+    if not row_dt:
+        return saved
+    date_part = row_dt.strftime("%Y-%m-%d")
+    time_part = _parse_row_time(row.get("date") or "") or f"{row_dt.hour:02d}{row_dt.minute:02d}"
+
+    # 3. Amount: parse the PDF. If parsing fails, leave as-is.
+    try:
+        from ..parsers.pdf import parse_pdf
+        r = parse_pdf(saved)
+        amount_part = str(int(round(r.amount)))
+    except Exception as e:
+        console.print(f"[yellow]  rename: could not parse amount from {saved.name}: {e}[/yellow]")
+        return saved
+
+    new_name = f"Blinkit_{order_id}_{date_part}_{time_part}_{amount_part}.pdf"
+    target = saved.with_name(new_name)
+    if target.exists() and target != saved:
+        console.print(f"[dim]  rename target {new_name} already exists, leaving {saved.name}[/dim]")
+        return saved
+    try:
+        saved.rename(target)
+        console.print(f"[dim]  renamed -> {new_name}[/dim]")
+        return target
+    except Exception as e:
+        console.print(f"[yellow]  rename failed: {e}[/yellow]")
+        return saved
+
+
 def _existing_long_ids() -> set[str]:
-    """Return the set of long order ids already on disk (inbox + processed)
-    so we can skip re-downloading."""
+    """Return identifiers for invoices already on disk (inbox + processed).
+    Set includes both extracted ORD<digits> tokens AND raw filenames, so we
+    can dedup even when we can't extract a long order id."""
     ids: set[str] = set()
     for d in (INBOX, PROCESSED):
         if not d.exists():
             continue
         for p in d.glob("*.pdf"):
-            # Filenames look like ForwardInvoice_ORD<digits>.pdf
+            ids.add(p.name)  # dedup by exact filename
             stem = p.stem
             if "ORD" in stem:
                 token = stem[stem.index("ORD"):].split("_")[0]
@@ -508,84 +681,196 @@ def _existing_long_ids() -> set[str]:
     return ids
 
 
-def _process_one_order(page: Page, row: dict, dest_dir: Path, have: set[str]) -> str | None:
-    """Click into a row, expand summary, download invoice. Returns the long
-    order id if a NEW invoice was downloaded; returns '' if order was already
-    on disk; returns None on any failure."""
-    # Click row by center coords (the row isn't an anchor).
+def _on_detail_page(page: Page) -> bool:
+    """Heuristic: we're on an order detail page if any of these markers appear.
+    More robust than gating on ORD<digits> alone — some detail pages render
+    the long order id late, inside a clipped element, or not at all in
+    innerText (shadow DOM / lazy section)."""
     try:
-        page.mouse.click(row["x"], row["y"])
+        return bool(page.evaluate(
+            """
+            () => {
+              const t = (document.body && document.body.innerText) || '';
+              if (/order\\s+summary/i.test(t)) return true;
+              if (/download\\s+invoice/i.test(t)) return true;
+              if (/bill\\s+total/i.test(t)) return true;
+              if (/items?\\s+in\\s+this\\s+order/i.test(t)) return true;
+              return false;
+            }
+            """
+        ))
+    except Exception:
+        return False
+
+
+def _extract_order_id(page: Page) -> str:
+    """Best-effort extraction of a stable order identifier. Tries, in order:
+      1. ORD<digits> token anywhere in innerText
+      2. Long digit run after 'Order id' / 'Order ID' label
+      3. ID-shaped path segment in the URL
+    Returns '' if nothing usable found — caller should still proceed since
+    the invoice download itself provides a filename."""
+    try:
+        return page.evaluate(
+            """
+            () => {
+              const t = (document.body && document.body.innerText) || '';
+              // 1. ORD prefix anywhere
+              let m = t.match(/ORD\\d{8,}/);
+              if (m) return m[0];
+              // 2. After 'Order id' / 'Order ID' label
+              m = t.match(/order\\s*id[:\\s]+([A-Za-z0-9_-]{6,})/i);
+              if (m) return m[1];
+              // 3. URL slug (Blinkit sometimes uses /account/orders/<id>)
+              const path = (location.pathname || '');
+              const seg = path.split('/').filter(Boolean).pop() || '';
+              if (/^[A-Za-z0-9_-]{6,}$/.test(seg) && seg.toLowerCase() !== 'orders') {
+                return seg;
+              }
+              return '';
+            }
+            """
+        ) or ""
+    except Exception:
+        return ""
+
+
+def _process_one_order(page: Page, row: dict, dest_dir: Path, have: set[str]) -> str | None:
+    """Click into a row, download invoice. Returns the order id (or filename)
+    if a NEW invoice was downloaded; returns '' if order was already on disk;
+    returns None on any failure."""
+    # Scroll the row into view before clicking — page.goto() between rows
+    # resets scroll to top, so the originally-captured y-coords are wrong
+    # for rows that were below the fold at enumeration time.
+    try:
+        page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 200))", row["y"])
+        page.wait_for_timeout(150)
+    except Exception:
+        pass
+
+    # Click row by center coords, using the post-scroll viewport position.
+    try:
+        click_y = page.evaluate(
+            "(y) => y - window.scrollY", row["y"]
+        )
+        page.mouse.click(row["x"], click_y)
     except Exception as e:
         console.print(f"[yellow]  could not click row @({row['x']},{row['y']}): {e}[/yellow]")
         return None
 
-    try:
-        page.wait_for_load_state("networkidle", timeout=15000)
-    except Exception:
-        pass
-    page.wait_for_timeout(1200)
+    # Wait for ANY detail-page signal (not just ORD<digits>). The long order
+    # id sometimes never appears in innerText — but as long as we landed on
+    # a detail page, the Download Invoice link is still actionable.
+    def _wait_landed(timeout_s: float) -> bool:
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            if _on_detail_page(page):
+                return True
+            page.wait_for_timeout(200)
+        return False
 
-    long_id = page.evaluate(
-        "() => { const t=(document.body&&document.body.innerText)||''; const m=t.match(/ORD\\d{8,}/); return m?m[0]:''; }"
-    )
-    if not long_id:
-        console.print("[yellow]  could not read long order id from detail page[/yellow]")
-        return None
-    console.print(f"[dim]  long order id: {long_id}[/dim]")
+    landed = _wait_landed(5.0)
+    if not landed:
+        # Click may have missed — row coords could be stale after scroll
+        # or a soft layout shift. Re-locate the row by its text and retry once.
+        retry_target = row.get("text_sample") or ""
+        retried = False
+        if retry_target:
+            try:
+                # Find a fresh row matching this text sample and click its center.
+                coords = page.evaluate(
+                    """
+                    (sample) => {
+                      const norm = s => (s||'').replace(/\\s+/g,' ').trim();
+                      const want = norm(sample).slice(0, 80);
+                      if (!want) return null;
+                      for (const el of document.querySelectorAll('*')) {
+                        const t = norm(el.innerText || '');
+                        if (t.length > 60 && t.length < 400 && t.includes(want)) {
+                          const r = el.getBoundingClientRect();
+                          if (r.width > 100 && r.height > 30) {
+                            return {x: Math.round(r.x + r.width/2),
+                                    y: Math.round(r.y + r.height/2)};
+                          }
+                        }
+                      }
+                      return null;
+                    }
+                    """,
+                    retry_target,
+                )
+                if coords and isinstance(coords, dict):
+                    page.evaluate("(y) => window.scrollTo(0, Math.max(0, y - 200))", coords["y"])
+                    page.wait_for_timeout(150)
+                    click_y2 = page.evaluate("(y) => y - window.scrollY", coords["y"])
+                    page.mouse.click(coords["x"], click_y2)
+                    retried = True
+                    landed = _wait_landed(5.0)
+            except Exception as e:
+                console.print(f"[dim]  retry-click failed: {e}[/dim]")
+        if not landed:
+            try:
+                here = _safe_url(page)
+                console.print(
+                    f"[yellow]  click did not open a detail page "
+                    f"(retried={retried}, URL: {here})[/yellow]"
+                )
+                _snap(page, f"miss_click_{row.get('id','?')}")
+            except Exception:
+                console.print("[yellow]  click did not open a detail page[/yellow]")
+            return None
 
-    # Dedup check now that we know the long id.
-    if long_id in have:
-        console.print(f"[dim]  already have {long_id}, skipping[/dim]")
-        return ""
-
-    # Expand the summary view.
-    expanded = False
-    for sel in [
-        'text="View order summary"',
-        'a:has-text("View order summary")',
-        'button:has-text("View order summary")',
-    ]:
-        try:
-            page.locator(sel).first.click(timeout=3000)
-            expanded = True
-            break
-        except Exception:
-            continue
-    if not expanded:
-        console.print("[yellow]  no 'View order summary' link found[/yellow]")
+    # Best-effort id extraction. May be empty — that's OK, the download itself
+    # carries a unique filename.
+    order_id = _extract_order_id(page)
+    if order_id:
+        console.print(f"[dim]  order id: {order_id}[/dim]")
+        # Dedup as soon as we know the id.
+        if order_id in have:
+            console.print(f"[dim]  already have {order_id}, skipping[/dim]")
+            return ""
     else:
-        try:
-            page.wait_for_load_state("networkidle", timeout=10000)
-        except Exception:
-            pass
-        page.wait_for_timeout(1000)
+        console.print(f"[dim]  no order id readable, proceeding to download[/dim]")
+        # Synthesize a placeholder so the filename is still unique.
+        order_id = f"row_{row.get('id', 'unknown')}_{int(time.time())}"
 
-    saved = _try_download_invoice(page, dest_dir, long_id)
-    return long_id if saved else None
+    saved = _try_download_invoice(page, dest_dir, order_id, have)
+    if not saved:
+        return None
+    # Rename to Blinkit_<ORD>_<DATE>_<TIME>_<AMOUNT>.pdf using row date+time and
+    # parsed PDF amount. Falls back to original name if anything required is missing.
+    saved = _rename_blinkit_pdf(saved, row, datetime.now().year)
+    # Return the filename — it's the most stable identifier we can hand back,
+    # and `have` already contains filenames so future dedup works.
+    return saved.name
 
 
 def _back_to_orders(page: Page) -> None:
-    """Return to the orders listing. Use direct nav for reliability."""
+    """Return to the orders listing. Use direct nav, but don't block on
+    networkidle — the SPA rarely reaches it within timeout."""
     try:
         page.goto(BLINKIT_URL, wait_until="domcontentloaded", timeout=15000)
-        page.wait_for_load_state("networkidle", timeout=10000)
     except Exception:
         pass
-    page.wait_for_timeout(800)
+    # Poll for the orders list marker instead of waiting blindly.
+    deadline = time.monotonic() + 5.0
+    while time.monotonic() < deadline:
+        try:
+            if page.evaluate(
+                "() => /\\bORD\\d{6,}\\b|Order ID/i.test((document.body&&document.body.innerText)||'')"
+            ):
+                return
+        except Exception:
+            pass
+        page.wait_for_timeout(200)
 
 
-def iterate_orders(page: Page, since_iso: str | None) -> int:
+def iterate_orders(page: Page, since_iso: str | None, skip_weekends: bool = False) -> int:
     """Walk every order on the listing, downloading invoices for the ones
     we don't already have and that fall after the since cutoff. Returns
     the number of new invoices downloaded."""
     _dismiss_address_modal(page)
     page.wait_for_timeout(600)
-    _snap(page, "00_orders_page")
-
-    orders = _enumerate_orders(page)
-    console.print(f"[cyan]Order rows found: {len(orders)}[/cyan]")
-    if not orders:
-        return 0
 
     # Parse since cutoff.
     since_dt: datetime | None = None
@@ -595,17 +880,32 @@ def iterate_orders(page: Page, since_iso: str | None) -> int:
         except Exception:
             console.print(f"[yellow]  could not parse since={since_iso}; ignoring cutoff[/yellow]")
 
+    ref_year = datetime.now().year
+
+    # Paginate the listing first so older orders are surfaced. Stops early
+    # once any visible row is older than the cutoff.
+    orders = _load_all_orders(page, since_dt=since_dt, ref_year=ref_year)
+    _snap(page, "00_orders_page")
+    console.print(f"[cyan]Order rows found: {len(orders)}[/cyan]")
+    if not orders:
+        return 0
+
     have = _existing_long_ids()
     if have:
         console.print(f"[dim]  already on disk: {sorted(have)}[/dim]")
-
-    ref_year = datetime.now().year
     downloaded = 0
     for i, row in enumerate(orders):
         # Skip by date.
         row_dt = _parse_row_date(row.get("date") or "", ref_year)
         if since_dt and row_dt and row_dt < since_dt:
             console.print(f"  [dim]skip #{row.get('id', '?')} ({row.get('date')}) — before cutoff[/dim]")
+            continue
+        # Skip weekends if requested. weekday(): Mon=0..Sun=6, so 5/6 are Sat/Sun.
+        # If we couldn't parse the row date, keep the order (better to download
+        # than silently drop a Friday-night purchase that we misread).
+        if skip_weekends and row_dt and row_dt.weekday() >= 5:
+            day_name = "Saturday" if row_dt.weekday() == 5 else "Sunday"
+            console.print(f"  [dim]skip #{row.get('id', '?')} ({row.get('date')}) — {day_name}[/dim]")
             continue
 
         console.print(
@@ -617,12 +917,18 @@ def iterate_orders(page: Page, since_iso: str | None) -> int:
             downloaded += 1
 
         _back_to_orders(page)
-        # Re-enumerate is overkill; listings are stable within a session, so
-        # we trust the original row list. Coordinates may have shifted if
-        # layout changed, so re-fetch them.
+        # page.goto() re-collapses the paginated list back to the first page
+        # (~10 rows). For rows beyond that, we must re-paginate to surface
+        # them again before the next click can land. Skip the re-paginate
+        # work for the trivial first-page case.
         fresh = _enumerate_orders(page)
-        if len(fresh) == len(orders):
-            orders = fresh  # refresh coords in place
+        if len(fresh) < len(orders):
+            fresh = _load_all_orders(page, since_dt=since_dt, ref_year=ref_year)
+        if fresh:
+            # Match rows by text_sample (most unique key across re-renders).
+            # Short id is unreliable — amounts like '1,006' collide.
+            by_sample = {r["text_sample"]: r for r in fresh}
+            orders = [by_sample.get(r["text_sample"], r) for r in orders]
 
     return downloaded
 
@@ -734,11 +1040,8 @@ def discover(page: Page) -> int:
     return 1 if saved else 0
 
 
-def fetch(since_iso: str | None) -> int:
-    """Entry point. Returns count of PDFs downloaded.
-
-    Phase 0 right now: opens browser, waits for login, dumps page structure
-    so we can wire up the actual download loop next."""
+def fetch(since_iso: str | None, skip_weekends: bool = False) -> int:
+    """Entry point. Returns count of PDFs downloaded."""
     INBOX.mkdir(parents=True, exist_ok=True)
     if since_iso:
         console.print(f"[cyan]Fetching Blinkit orders since:[/cyan] {since_iso}")
@@ -747,6 +1050,6 @@ def fetch(since_iso: str | None) -> int:
 
     n = 0
     with blinkit_session() as page:
-        n = iterate_orders(page, since_iso)
+        n = iterate_orders(page, since_iso, skip_weekends=skip_weekends)
         page.wait_for_timeout(1500)
     return n

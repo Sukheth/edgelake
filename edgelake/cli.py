@@ -139,23 +139,103 @@ def upload(directory: Path | None, dry_run: bool) -> None:
 
 
 @main.command()
+@click.option("--dir", "directory", type=click.Path(exists=True, file_okay=False, path_type=Path), default=None,
+              help="Folder to rename PDFs in. Defaults to receipts/inbox/.")
+@click.option("--dry-run", is_flag=True, help="Print proposed renames without applying.")
+def rename(directory: Path | None, dry_run: bool) -> None:
+    """Rename existing Blinkit PDFs to Blinkit_<ORDERID>_<YYYY-MM-DD>_0000_<AMOUNT>.pdf.
+
+    Time is '0000' because backfill has no row-level time data — only date+amount
+    are recoverable from the PDF itself. New fetches keep their real time."""
+    import re as _re
+    directory = directory or INBOX
+    pdfs = sorted(directory.glob("*.pdf"))
+    if not pdfs:
+        console.print(f"[yellow]No PDFs in {directory}[/yellow]")
+        return
+
+    target_shape = _re.compile(r"^Blinkit_ORD\d+_\d{4}-\d{2}-\d{2}_\d{4}_\d+\.pdf$")
+    renamed = 0
+    skipped = 0
+    failed = 0
+    for pdf in pdfs:
+        if target_shape.match(pdf.name):
+            skipped += 1
+            continue
+        # Need an ORD token to anchor on.
+        if "ORD" not in pdf.stem:
+            console.print(f"[dim]  skip (no ORD in name): {pdf.name}[/dim]")
+            skipped += 1
+            continue
+        order_id = pdf.stem[pdf.stem.index("ORD"):].split("_")[0]
+        try:
+            r = parse_pdf(pdf)
+        except Exception as e:  # noqa: BLE001
+            console.print(f"[red]  parse failed: {pdf.name}: {e}[/red]")
+            failed += 1
+            continue
+        if r.merchant != "Blinkit":
+            console.print(f"[dim]  skip (not Blinkit, got {r.merchant}): {pdf.name}[/dim]")
+            skipped += 1
+            continue
+        date_part = r.date.isoformat()
+        amount_part = str(int(round(r.amount)))
+        new_name = f"Blinkit_{order_id}_{date_part}_0000_{amount_part}.pdf"
+        target = pdf.with_name(new_name)
+        if target.exists() and target != pdf:
+            console.print(f"[yellow]  conflict: {new_name} exists, leaving {pdf.name}[/yellow]")
+            failed += 1
+            continue
+        if dry_run:
+            console.print(f"  would rename: {pdf.name} -> {new_name}")
+            renamed += 1
+            continue
+        try:
+            pdf.rename(target)
+            console.print(f"[green]  {pdf.name}[/green] -> {new_name}")
+            renamed += 1
+        except Exception as e:  # noqa: BLE001
+            console.print(f"[red]  rename failed: {pdf.name}: {e}[/red]")
+            failed += 1
+
+    verb = "would rename" if dry_run else "renamed"
+    console.print(f"\n[cyan]{verb}: {renamed}  skipped: {skipped}  failed: {failed}[/cyan]")
+
+
+@main.command()
 @click.option("--merchant", type=click.Choice(["blinkit"]), default="blinkit",
               help="Which merchant to fetch from (only blinkit supported for now).")
 @click.option("--since", "since", default=None,
-              help="ISO date/time cutoff. Defaults to last successful fetch (or all if first run).")
-def fetch(merchant: str, since: str | None) -> None:
+              help="ISO date/time cutoff (e.g. 2026-05-01 or 2026-05-01T09:00). "
+                   "Overrides the last-run watermark for this run only.")
+@click.option("--resume/--no-resume", default=True,
+              help="When --since is not given, resume from the last successful fetch "
+                   "watermark. Use --no-resume to pull everything available.")
+@click.option("--skip-weekends", is_flag=True,
+              help="Skip orders placed on Saturday or Sunday.")
+def fetch(merchant: str, since: str | None, resume: bool, skip_weekends: bool) -> None:
     """Download invoice PDFs from a merchant into receipts/inbox/."""
-    since_iso = since or get_last_fetched(merchant)
-    if since_iso:
-        console.print(f"[cyan]Since cutoff:[/cyan] {since_iso}")
+    if since:
+        since_iso = since
+        console.print(f"[cyan]Since cutoff (explicit):[/cyan] {since_iso}")
+    elif resume:
+        since_iso = get_last_fetched(merchant)
+        if since_iso:
+            console.print(f"[cyan]Resuming from last run:[/cyan] {since_iso}")
+        else:
+            console.print("[cyan]No prior fetch on record — pulling everything available.[/cyan]")
     else:
-        console.print("[cyan]No prior fetch on record — pulling everything available.[/cyan]")
+        since_iso = None
+        console.print("[cyan]--no-resume: pulling everything available.[/cyan]")
+
+    if skip_weekends:
+        console.print("[cyan]Skipping Saturday/Sunday orders.[/cyan]")
 
     from datetime import datetime
     run_started = datetime.utcnow().isoformat()
 
     if merchant == "blinkit":
-        n = blinkit_fetcher.fetch(since_iso)
+        n = blinkit_fetcher.fetch(since_iso, skip_weekends=skip_weekends)
     else:
         console.print(f"[red]Unsupported merchant: {merchant}[/red]")
         return
