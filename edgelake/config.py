@@ -19,6 +19,14 @@ BLINKIT_URL = os.getenv("BLINKIT_URL", "https://blinkit.com/account/orders")
 
 INBOX = ROOT / "receipts" / "inbox"
 PROCESSED = ROOT / "receipts" / "processed"
+NEEDS_APPROVAL = ROOT / "receipts" / "needs-approval"
+
+# Expense policy thresholds (INR).
+#   amount <= POLICY_EXACT_MAX            -> use exact amount
+#   POLICY_EXACT_MAX < amount < POLICY_APPROVAL_MIN -> cap to POLICY_EXACT_MAX
+#   amount >= POLICY_APPROVAL_MIN         -> needs human approval, do not upload
+POLICY_EXACT_MAX = 1000.0
+POLICY_APPROVAL_MIN = 1100.0
 PROFILE_DIR = ROOT / ".playwright-profiles" / "chromeriver"
 BLINKIT_PROFILE_DIR = ROOT / ".playwright-profiles" / "blinkit"
 DEBUG_DIR = ROOT / "debug"

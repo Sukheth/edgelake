@@ -10,6 +10,12 @@ from playwright.sync_api import BrowserContext, Page, sync_playwright
 from rich.console import Console
 
 from ..config import BLINKIT_PROFILE_DIR, BLINKIT_URL, DEBUG_DIR, INBOX, PROCESSED
+from ..ledger import (
+    get_by_order_id,
+    hash_file,
+    known_order_ids,
+    upsert_fetched,
+)
 
 console = Console()
 
@@ -620,11 +626,27 @@ def _parse_row_time(date_str: str) -> str:
     return f"{hour:02d}{mm}"
 
 
-def _rename_blinkit_pdf(saved: Path, row: dict, ref_year: int) -> Path:
+def _row_amount_float(row: dict) -> float | None:
+    """Listing amount comes back as a string like '1,006' or '1,006.50'. Convert
+    to float for comparison. Returns None if the row didn't yield an amount."""
+    raw = (row.get("amount") or "").strip()
+    if not raw:
+        return None
+    try:
+        return float(raw.replace(",", ""))
+    except ValueError:
+        return None
+
+
+def _rename_blinkit_pdf(saved: Path, row: dict, ref_year: int, page: Page | None = None) -> Path:
     """Rename a freshly-downloaded Blinkit invoice to:
         Blinkit_<ORDERID>_<YYYY-MM-DD>_<HHMM>_<AMOUNT>.pdf
     Order ID comes from the existing filename (which Blinkit names ForwardInvoice_ORD<digits>.pdf).
-    Date+time come from the row text; amount comes from parsing the PDF.
+    Date+time come from the row text; amount is parsed from the PDF and
+    cross-checked against the listing row amount. On mismatch (>= Rs.1) we
+    log a loud warning, snap a screenshot, and use the LISTING amount in the
+    filename — the listing is what the user saw and treats as authoritative
+    for this run. PDF file itself is kept either way.
     Falls back to leaving the file alone if anything required is missing."""
     # 1. Pull ORD<digits> out of the current filename — that's our canonical id.
     stem = saved.stem
@@ -641,15 +663,45 @@ def _rename_blinkit_pdf(saved: Path, row: dict, ref_year: int) -> Path:
     date_part = row_dt.strftime("%Y-%m-%d")
     time_part = _parse_row_time(row.get("date") or "") or f"{row_dt.hour:02d}{row_dt.minute:02d}"
 
-    # 3. Amount: parse the PDF. If parsing fails, leave as-is.
+    # 3. Amount. Parse the PDF, then cross-check against the listing row.
+    pdf_amount: float | None = None
     try:
         from ..parsers.pdf import parse_pdf
         r = parse_pdf(saved)
-        amount_part = str(int(round(r.amount)))
+        pdf_amount = float(r.amount)
     except Exception as e:
         console.print(f"[yellow]  rename: could not parse amount from {saved.name}: {e}[/yellow]")
-        return saved
+        # Fall through — try to use the listing amount if available.
 
+    row_amount = _row_amount_float(row)
+    chosen: float | None
+    if pdf_amount is None and row_amount is None:
+        console.print(f"[yellow]  rename: no amount from PDF or listing for {saved.name}, leaving as-is[/yellow]")
+        return saved
+    elif pdf_amount is None:
+        console.print(f"[yellow]  rename: PDF parse failed, using listing amount Rs.{row_amount:.2f}[/yellow]")
+        chosen = row_amount
+    elif row_amount is None:
+        # No listing amount to cross-check — trust the PDF silently.
+        chosen = pdf_amount
+    elif abs(pdf_amount - row_amount) >= 1.0:
+        # Mismatch: warn LOUDLY and prefer the listing.
+        console.print(
+            f"[bold yellow]  AMOUNT MISMATCH for {order_id}: "
+            f"listing=Rs.{row_amount:.2f}  PDF=Rs.{pdf_amount:.2f}  "
+            f"-> using listing in filename[/bold yellow]"
+        )
+        if page is not None:
+            try:
+                _snap(page, f"amount_mismatch_{order_id}")
+            except Exception:
+                pass
+        chosen = row_amount
+    else:
+        # Within tolerance — listing rounds, PDF has decimals. Use PDF (more precise).
+        chosen = pdf_amount
+
+    amount_part = str(int(round(chosen)))
     new_name = f"Blinkit_{order_id}_{date_part}_{time_part}_{amount_part}.pdf"
     target = saved.with_name(new_name)
     if target.exists() and target != saved:
@@ -665,20 +717,56 @@ def _rename_blinkit_pdf(saved: Path, row: dict, ref_year: int) -> Path:
 
 
 def _existing_long_ids() -> set[str]:
-    """Return identifiers for invoices already on disk (inbox + processed).
-    Set includes both extracted ORD<digits> tokens AND raw filenames, so we
-    can dedup even when we can't extract a long order id."""
+    """Return identifiers we've already seen (ledger + on-disk fallback).
+
+    The ledger is the source of truth — it tracks every order_id and the
+    filename Blinkit gave us. We still glob disk as a belt-and-suspenders
+    check for files that exist but weren't ledgered (which `reconcile`
+    should have caught upstream, but better safe than re-downloading)."""
     ids: set[str] = set()
+    # 1. Ledger: all known order_ids, plus any filenames we've persisted.
+    ids.update(known_order_ids())
+    try:
+        import sqlite3
+        from ..config import LEDGER_PATH
+        with sqlite3.connect(LEDGER_PATH) as conn:
+            for (fn,) in conn.execute(
+                "SELECT filename FROM receipts WHERE filename IS NOT NULL"
+            ):
+                ids.add(fn)
+    except Exception:
+        pass
+    # 2. Disk fallback (reconcile should have ledgered these; this is paranoia).
     for d in (INBOX, PROCESSED):
         if not d.exists():
             continue
         for p in d.glob("*.pdf"):
-            ids.add(p.name)  # dedup by exact filename
+            ids.add(p.name)
             stem = p.stem
             if "ORD" in stem:
                 token = stem[stem.index("ORD"):].split("_")[0]
                 ids.add(token)
     return ids
+
+
+def _canonical_order_id(extracted: str, suggested_filename: str | None, sha: str | None) -> str:
+    """Settle on a stable order_id given best-effort extraction results.
+
+    Priority (most-stable first):
+      1. ORD<digits> extracted from detail page innerText
+      2. ORD<digits> parsed out of Blinkit's suggested download filename
+      3. Synthetic 'manual_<sha[:12]>' when neither is available
+    """
+    if extracted and extracted.startswith("ORD") and extracted[3:].isdigit():
+        return extracted
+    if suggested_filename and "ORD" in suggested_filename:
+        stem = Path(suggested_filename).stem
+        token = stem[stem.index("ORD"):].split("_")[0].split(".")[0]
+        if token.startswith("ORD") and token[3:].isdigit():
+            return token
+    if sha:
+        return f"manual_{sha[:12]}"
+    return extracted or f"unknown_{int(time.time())}"
 
 
 def _on_detail_page(page: Page) -> bool:
@@ -821,28 +909,56 @@ def _process_one_order(page: Page, row: dict, dest_dir: Path, have: set[str]) ->
             return None
 
     # Best-effort id extraction. May be empty — that's OK, the download itself
-    # carries a unique filename.
-    order_id = _extract_order_id(page)
-    if order_id:
-        console.print(f"[dim]  order id: {order_id}[/dim]")
-        # Dedup as soon as we know the id.
-        if order_id in have:
-            console.print(f"[dim]  already have {order_id}, skipping[/dim]")
+    # carries a unique filename which usually contains the ORD token.
+    extracted_id = _extract_order_id(page)
+    if extracted_id:
+        console.print(f"[dim]  order id: {extracted_id}[/dim]")
+        if extracted_id in have or get_by_order_id(extracted_id):
+            console.print(f"[dim]  already have {extracted_id}, skipping[/dim]")
             return ""
-    else:
-        console.print(f"[dim]  no order id readable, proceeding to download[/dim]")
-        # Synthesize a placeholder so the filename is still unique.
-        order_id = f"row_{row.get('id', 'unknown')}_{int(time.time())}"
 
-    saved = _try_download_invoice(page, dest_dir, order_id, have)
+    saved = _try_download_invoice(page, dest_dir, extracted_id or "unknown", have)
     if not saved:
         return None
-    # Rename to Blinkit_<ORD>_<DATE>_<TIME>_<AMOUNT>.pdf using row date+time and
-    # parsed PDF amount. Falls back to original name if anything required is missing.
-    saved = _rename_blinkit_pdf(saved, row, datetime.now().year)
-    # Return the filename — it's the most stable identifier we can hand back,
-    # and `have` already contains filenames so future dedup works.
-    return saved.name
+
+    # Settle on a canonical order_id now that we have the suggested filename.
+    try:
+        sha = hash_file(saved)
+    except Exception:
+        sha = None
+    order_id = _canonical_order_id(extracted_id, saved.name, sha)
+
+    # If the canonical id was already in the ledger (e.g. extracted_id was
+    # empty but the filename revealed an ORD we've seen), we still wrote a
+    # new copy of the PDF. Skip ledgering a duplicate — but don't delete the
+    # file since that's the user's data. Reconcile will sort it out.
+    if order_id != extracted_id and order_id in have:
+        console.print(f"[dim]  recovered id {order_id} already in ledger, leaving file as-is[/dim]")
+        return ""
+
+    # Parse the listing-row amount + date + time, then write to ledger.
+    listing_amount = _row_amount_float(row)
+    ref_year = datetime.now().year
+    row_dt = _parse_row_date(row.get("date") or "", ref_year)
+    date_iso = row_dt.date().isoformat() if row_dt else None
+    order_time = _parse_row_time(row.get("date") or "") or None
+    upsert_fetched(
+        order_id=order_id,
+        sha=sha,
+        filename=saved.name,
+        merchant="Blinkit",
+        listing_amount=listing_amount,
+        date=date_iso,
+        order_time=order_time,
+    )
+    if listing_amount is not None:
+        console.print(_ascii(
+            f"[dim]  ledgered {order_id}  listing=Rs.{listing_amount:.2f}  "
+            f"file={saved.name}[/dim]"
+        ))
+    else:
+        console.print(f"[dim]  ledgered {order_id}  listing=?  file={saved.name}[/dim]")
+    return order_id
 
 
 def _back_to_orders(page: Page) -> None:
