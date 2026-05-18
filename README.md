@@ -29,13 +29,16 @@ Orchestrate the Blinkit → Chrome River pipeline with `edgelake run`. Telegram 
 
 ## Setup
 
-```bash
-cd c:/BuildsAndScripts/edgelake
-python -m venv .venv
-.venv/Scripts/activate
-pip install -e .
-playwright install chromium
-cp .env.example .env   # edit DEFAULT_LOCATION, DEFAULT_PROJECT_CODE, TELEGRAM_BOT_TOKEN, GEMINI_API_KEY
+```
+setup.bat
+```
+
+That's it. The script creates a virtualenv, installs dependencies, installs Playwright Chromium, and walks you through filling in `.env` interactively (bot token, Gemini key, location, project code).
+
+After it finishes, activate the venv once per terminal session:
+
+```
+.venv\Scripts\activate
 ```
 
 First run on each merchant opens a Chromium window — complete Okta SSO (Chrome River) or phone OTP (Blinkit) once. Sessions persist in `.playwright-profiles/`.
