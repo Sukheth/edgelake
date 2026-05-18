@@ -33,9 +33,15 @@ Orchestrate the Blinkit → Chrome River pipeline with `edgelake run`. Telegram 
 setup.bat
 ```
 
-That's it. The script creates a virtualenv, installs dependencies, installs Playwright Chromium, and walks you through filling in `.env` interactively (bot token, Gemini key, location, project code).
+Bootstraps the virtualenv and deps, then drops into `edgelake setup` which installs Playwright Chromium and walks you through filling in `.env` interactively (bot token, Gemini key, location, project code).
 
-After it finishes, activate the venv once per terminal session:
+To reconfigure `.env` later (e.g. rotate an API key) without re-bootstrapping:
+
+```
+edgelake setup
+```
+
+After setup, activate the venv once per terminal session:
 
 ```
 .venv\Scripts\activate

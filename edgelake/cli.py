@@ -713,12 +713,71 @@ def run(ctx: click.Context, merchant: str, since: str | None, resume: bool,
 
 
 @main.command()
+def setup() -> None:
+    """Interactive first-time setup: installs Playwright Chromium and configures .env."""
+    import subprocess
+    from .config import ROOT
+
+    console.print("[cyan]edgelake setup[/cyan]")
+
+    # Playwright Chromium
+    console.print("\n[bold][1/2] Installing Playwright Chromium...[/bold]")
+    subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=True)
+
+    # .env
+    console.print("\n[bold][2/2] Configuring .env...[/bold]")
+    env_path = ROOT / ".env"
+    example_path = ROOT / ".env.example"
+
+    existing: dict[str, str] = {}
+    if env_path.exists():
+        for line in env_path.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                existing[k.strip()] = v.strip()
+    elif example_path.exists():
+        for line in example_path.read_text().splitlines():
+            if "=" in line and not line.startswith("#"):
+                k, _, v = line.partition("=")
+                existing[k.strip()] = v.strip()
+
+    console.print("Press Enter to keep the current value shown in brackets.\n")
+
+    def ask(key: str, label: str) -> str:
+        current = existing.get(key, "")
+        display = f"[{current}]" if current else ""
+        val = click.prompt(f"  {label} {display}", default=current, show_default=False)
+        return val
+
+    tg    = ask("TELEGRAM_BOT_TOKEN", "Telegram bot token")
+    gem   = ask("GEMINI_API_KEY",     "Gemini API key")
+    model = ask("GEMINI_MODEL",       "Gemini model")
+    loc   = ask("DEFAULT_LOCATION",   "Default location")
+    proj  = ask("DEFAULT_PROJECT_CODE", "Default project code")
+
+    lines = [
+        f"TELEGRAM_BOT_TOKEN={tg}",
+        f"GEMINI_API_KEY={gem}",
+        f"GEMINI_MODEL={model or 'gemini-2.0-flash'}",
+        f"CHROMERIVER_URL={existing.get('CHROMERIVER_URL', 'https://app.eu1.chromeriver.com/')}",
+        f"DEFAULT_CATEGORY={existing.get('DEFAULT_CATEGORY', 'Meals - Chocolate/Dessert/Snacks')}",
+        f"DEFAULT_CURRENCY={existing.get('DEFAULT_CURRENCY', 'INR')}",
+        f"DEFAULT_LOCATION={loc}",
+        f"DEFAULT_PROJECT_CODE={proj}",
+        f"BLINKIT_URL={existing.get('BLINKIT_URL', 'https://blinkit.com/account/orders')}",
+    ]
+    env_path.write_text("\n".join(lines) + "\n")
+    console.print(f"\n[green]Wrote {env_path}[/green]")
+    console.print("\n[bold]Done![/bold] Run [cyan]edgelake telegram[/cyan] or [cyan]edgelake run[/cyan].")
+
+
+@main.command()
 @click.option("--token", default=None, envvar="TELEGRAM_BOT_TOKEN",
               help="Telegram bot token. Defaults to TELEGRAM_BOT_TOKEN env var.")
 def telegram(token: str | None) -> None:
     """Start the Telegram bot. Receives receipt photos/PDFs and queues them.
 
-    Set TELEGRAM_BOT_TOKEN in .env (or pass --token). Also set ANTHROPIC_API_KEY.
+    Set TELEGRAM_BOT_TOKEN and GEMINI_API_KEY in .env (or run `edgelake setup`).
     After receipts are queued, run `edgelake run --no-fetch` to file them."""
     from .telegram_bot.bot import run_bot
     console.print("[cyan]Starting Telegram bot. Press Ctrl-C to stop.[/cyan]")
