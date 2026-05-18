@@ -4,7 +4,7 @@ CLI tool that turns Indian grocery-delivery invoice PDFs (Blinkit, Swiggy Instam
 
 Two ways to get receipts in:
 
-- **Telegram bot** — forward any receipt photo or PDF to [@edgelakebot](https://t.me/edgelakebot) anytime. Gemini extracts merchant, date, and amount immediately. Works offline (Telegram buffers for 24 h).
+- **Telegram bot** — forward any receipt photo or PDF to your bot anytime. Gemini extracts merchant, date, and amount immediately. Works offline (Telegram buffers for 24 h).
 - **Blinkit fetcher** — drives the Blinkit orders UI in a real browser to download invoice PDFs automatically.
 
 ## Pipeline
@@ -48,7 +48,7 @@ First run on each merchant opens a Chromium window — complete Okta SSO (Chrome
 edgelake telegram          # start the bot (blocks; Ctrl-C to stop)
 ```
 
-Send any receipt photo or PDF to [@edgelakebot](https://t.me/edgelakebot). The bot replies with the extracted fields and queues the file in `receipts/inbox/`. Then run `edgelake run --no-fetch` to file everything queued.
+Send any receipt photo or PDF to your bot. It replies with the extracted fields and queues the file in `receipts/inbox/`. Then run `edgelake run --no-fetch` to file everything queued.
 
 ### End-to-end (Blinkit)
 
@@ -81,14 +81,34 @@ edgelake parse receipts/inbox/<file>.pdf   # one PDF, dump fields
 edgelake parse-all                         # every PDF in inbox/, summary table
 ```
 
+## Creating your Telegram bot and Gemini key
+
+### Telegram bot (one-time)
+
+1. Open Telegram and start a chat with [@BotFather](https://t.me/BotFather).
+2. Send `/newbot` and follow the prompts — choose a name and a username ending in `bot`.
+3. BotFather replies with a token like `123456789:ABCdef...`. Copy it.
+4. Add it to `.env`: `TELEGRAM_BOT_TOKEN=123456789:ABCdef...`
+5. Start a chat with your new bot (search for its username) and send `/start` — this is required before the bot can message you back.
+6. Find your personal chat ID: start a chat with [@userinfobot](https://t.me/userinfobot) and it will reply with your numeric ID. You don't need this in `.env`, but it's useful to know for debugging.
+
+### Gemini API key (one-time)
+
+1. Go to [Google AI Studio](https://aistudio.google.com/) and sign in with a Google account.
+2. Click **Get API key** → **Create API key**.
+3. Copy the key.
+4. Add it to `.env`: `GEMINI_API_KEY=AIza...`
+
+> **Note:** Use an AI Studio key, not a Google Cloud Console key. Cloud Console keys require billing to be enabled for the free-tier quota to work.
+
 ## Environment variables
 
 Set these in `.env`:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `TELEGRAM_BOT_TOKEN` | — | From [@BotFather](https://t.me/BotFather) |
-| `GEMINI_API_KEY` | — | From [Google AI Studio](https://aistudio.google.com/) (not Google Cloud Console) |
+| `TELEGRAM_BOT_TOKEN` | — | From [@BotFather](https://t.me/BotFather) — see above |
+| `GEMINI_API_KEY` | — | From [Google AI Studio](https://aistudio.google.com/) — see above |
 | `GEMINI_MODEL` | `gemini-2.0-flash` | Use `gemini-2.0-flash` or `gemini-1.5-flash` |
 | `CHROMERIVER_URL` | `https://app.eu1.chromeriver.com/` | |
 | `DEFAULT_CATEGORY` | `Meals - Chocolate/Dessert/Snacks` | |
