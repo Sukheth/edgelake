@@ -1,6 +1,6 @@
 # edgelake
 
-CLI tool that turns Indian grocery-delivery invoice PDFs (Blinkit, Swiggy Instamart) into expense **drafts** in Chrome River (Emburse Enterprise). Never submits — human reviews and submits in Chrome River.
+CLI tool that turns Indian grocery-delivery invoice PDFs (Blinkit, Swiggy Instamart) into expense **drafts** in Chrome River (Emburse Enterprise).
 
 ## Pipeline
 
