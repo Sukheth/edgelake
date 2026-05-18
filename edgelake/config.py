@@ -18,9 +18,9 @@ DEFAULT_PROJECT_CODE = os.getenv("DEFAULT_PROJECT_CODE", "")
 BLINKIT_URL = os.getenv("BLINKIT_URL", "https://blinkit.com/account/orders")
 
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
-ANTHROPIC_API_KEY = os.getenv("ANTHROPIC_API_KEY", "")
-# Haiku by default — fast and cheap for receipt OCR
-ANTHROPIC_MODEL = os.getenv("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
+# Flash by default — fast and cheap for receipt OCR
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 
 INBOX = ROOT / "receipts" / "inbox"
 PROCESSED = ROOT / "receipts" / "processed"

@@ -1,13 +1,13 @@
 from __future__ import annotations
 
-import base64
 import json
 import re
 from pathlib import Path
 
-import anthropic
+from google import genai
+from google.genai import types
 
-from ..config import ANTHROPIC_API_KEY, ANTHROPIC_MODEL
+from ..config import GEMINI_API_KEY, GEMINI_MODEL
 
 _SYSTEM = """\
 You extract structured data from receipt or invoice images and PDFs.
@@ -21,50 +21,41 @@ Use null for any field you cannot determine.
 """
 
 _MEDIA_TYPES: dict[str, str] = {
+    ".pdf": "application/pdf",
     ".jpg": "image/jpeg",
     ".jpeg": "image/jpeg",
     ".png": "image/png",
     ".webp": "image/webp",
-    ".gif": "image/gif",
 }
 
 
 def extract_receipt(file_path: Path) -> dict:
-    """Send a receipt file to Claude and return parsed fields as a dict.
+    """Send a receipt file to Gemini and return parsed fields as a dict.
 
-    Supports PDFs (sent as document) and images (sent as image block).
-    Raises ValueError if Claude returns something that can't be parsed as JSON.
+    Supports PDFs and images (JPEG, PNG, WebP).
+    Raises ValueError if the response can't be parsed as JSON.
     """
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY or None)
-    data = file_path.read_bytes()
-    b64 = base64.standard_b64encode(data).decode()
     suffix = file_path.suffix.lower()
-
-    if suffix == ".pdf":
-        content_block: dict = {
-            "type": "document",
-            "source": {"type": "base64", "media_type": "application/pdf", "data": b64},
-        }
-    elif suffix in _MEDIA_TYPES:
-        content_block = {
-            "type": "image",
-            "source": {"type": "base64", "media_type": _MEDIA_TYPES[suffix], "data": b64},
-        }
-    else:
+    if suffix not in _MEDIA_TYPES:
         raise ValueError(f"Unsupported file type: {suffix}")
 
-    response = client.messages.create(
-        model=ANTHROPIC_MODEL,
-        max_tokens=512,
-        system=_SYSTEM,
-        messages=[{"role": "user", "content": [content_block, {"type": "text", "text": "Extract receipt data."}]}],
+    client = genai.Client(api_key=GEMINI_API_KEY or None)
+    data = file_path.read_bytes()
+    mime = _MEDIA_TYPES[suffix]
+
+    response = client.models.generate_content(
+        model=GEMINI_MODEL,
+        contents=[
+            types.Part.from_bytes(data=data, mime_type=mime),
+            "Extract receipt data.",
+        ],
+        config=types.GenerateContentConfig(system_instruction=_SYSTEM),
     )
 
-    raw = response.content[0].text.strip()
-    # Strip markdown fences if Claude wraps it anyway.
+    raw = response.text.strip()
     raw = re.sub(r"^```(?:json)?\s*", "", raw)
     raw = re.sub(r"\s*```$", "", raw)
     try:
         return json.loads(raw.strip())
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Claude returned non-JSON: {raw[:200]}") from exc
+        raise ValueError(f"Gemini returned non-JSON: {raw[:200]}") from exc
