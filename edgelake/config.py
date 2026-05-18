@@ -30,8 +30,8 @@ NEEDS_APPROVAL = ROOT / "receipts" / "needs-approval"
 #   amount <= POLICY_EXACT_MAX            -> use exact amount
 #   POLICY_EXACT_MAX < amount < POLICY_APPROVAL_MIN -> cap to POLICY_EXACT_MAX
 #   amount >= POLICY_APPROVAL_MIN         -> needs human approval, do not upload
-POLICY_EXACT_MAX = 1000.0
-POLICY_APPROVAL_MIN = 1100.0
+POLICY_EXACT_MAX = float(os.getenv("POLICY_EXACT_MAX", "1000"))
+POLICY_APPROVAL_MIN = float(os.getenv("POLICY_APPROVAL_MIN", "1100"))
 PROFILE_DIR = ROOT / ".playwright-profiles" / "chromeriver"
 BLINKIT_PROFILE_DIR = ROOT / ".playwright-profiles" / "blinkit"
 DEBUG_DIR = ROOT / "debug"

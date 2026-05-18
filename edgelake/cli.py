@@ -755,6 +755,10 @@ def setup() -> None:
     loc   = ask("DEFAULT_LOCATION",   "Default location")
     proj  = ask("DEFAULT_PROJECT_CODE", "Default project code")
 
+    console.print("\n  [dim]Expense policy thresholds (amounts in your default currency)[/dim]")
+    exact_max     = ask("POLICY_EXACT_MAX",    "Max amount filed at exact value (e.g. 1000)")
+    approval_min  = ask("POLICY_APPROVAL_MIN", "Amount that triggers manual approval (e.g. 1100)")
+
     lines = [
         f"TELEGRAM_BOT_TOKEN={tg}",
         f"GEMINI_API_KEY={gem}",
@@ -765,6 +769,8 @@ def setup() -> None:
         f"DEFAULT_LOCATION={loc}",
         f"DEFAULT_PROJECT_CODE={proj}",
         f"BLINKIT_URL={existing.get('BLINKIT_URL', 'https://blinkit.com/account/orders')}",
+        f"POLICY_EXACT_MAX={exact_max or '1000'}",
+        f"POLICY_APPROVAL_MIN={approval_min or '1100'}",
     ]
     env_path.write_text("\n".join(lines) + "\n")
     console.print(f"\n[green]Wrote {env_path}[/green]")

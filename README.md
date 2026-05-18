@@ -132,15 +132,19 @@ The free tier includes 1,500 requests/day and 1 million tokens/minute on Gemini 
 
 ## Expense policy
 
-edgelake automatically applies your company's expense policy rules before filing:
+edgelake automatically applies expense policy rules before filing. The thresholds are set during `edgelake setup` and can be changed anytime by running `edgelake setup` again.
 
-| Amount (INR) | What happens |
+The defaults are:
+
+| Amount | What happens |
 |---|---|
 | ₹1,000 or less | Filed at the exact amount |
 | ₹1,001 – ₹1,099 | Capped to ₹1,000 automatically |
-| ₹1,100 or more | **Not filed** — moved to `receipts/needs-approval/` and marked for human review |
+| ₹1,100 or more | **Not filed** — moved to `receipts/needs-approval/` for manual review |
 
-Receipts over ₹1,100 are never uploaded automatically. You'll need to handle those manually in Chrome River.
+Receipts that exceed the approval threshold are never uploaded automatically. They sit in `receipts/needs-approval/` on your laptop until you handle them manually in Chrome River.
+
+To change the thresholds, run `edgelake setup` — it will show your current values in brackets and let you update them.
 
 ---
 
@@ -224,6 +228,8 @@ All variables are set in a `.env` file at the project root. Run `edgelake setup`
 | `DEFAULT_LOCATION` | `India` | Location field in Chrome River |
 | `DEFAULT_PROJECT_CODE` | — | Project/billing code in Chrome River |
 | `BLINKIT_URL` | `https://blinkit.com/account/orders` | Blinkit orders page URL |
+| `POLICY_EXACT_MAX` | `1000` | Amounts at or below this are filed exactly |
+| `POLICY_APPROVAL_MIN` | `1100` | Amounts at or above this are held for manual review |
 
 ### Persistent browser sessions
 
