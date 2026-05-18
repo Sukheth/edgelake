@@ -557,6 +557,10 @@ def rename(dry_run: bool) -> None:
                 failed += 1
                 continue
 
+        if path.suffix.lower() != ".pdf":
+            skipped += 1
+            continue
+
         if target_shape.match(path.name):
             skipped += 1
             continue
@@ -706,6 +710,19 @@ def run(ctx: click.Context, merchant: str, since: str | None, resume: bool,
     if snapshot:
         for st, n in snapshot.items():
             console.print(f"  {st:<16} {n}")
+
+
+@main.command()
+@click.option("--token", default=None, envvar="TELEGRAM_BOT_TOKEN",
+              help="Telegram bot token. Defaults to TELEGRAM_BOT_TOKEN env var.")
+def telegram(token: str | None) -> None:
+    """Start the Telegram bot. Receives receipt photos/PDFs and queues them.
+
+    Set TELEGRAM_BOT_TOKEN in .env (or pass --token). Also set ANTHROPIC_API_KEY.
+    After receipts are queued, run `edgelake run --no-fetch` to file them."""
+    from .telegram_bot.bot import run_bot
+    console.print("[cyan]Starting Telegram bot. Press Ctrl-C to stop.[/cyan]")
+    run_bot(token)
 
 
 if __name__ == "__main__":
