@@ -130,6 +130,17 @@ The free tier includes 1,500 requests/day and 1 million tokens/minute on Gemini 
 
 ---
 
+## Expense categories
+
+edgelake automatically picks the right Chrome River expense category for each receipt:
+
+| Receipt type | Chrome River category |
+|---|---|
+| Grocery delivery / snacks (Blinkit, Swiggy Instamart, Zepto) | Meals - Chocolate/Dessert/Snacks |
+| Restaurant meal / food delivery (Swiggy food, Zomato, any restaurant bill) | Individual Meals only (around Client Site or While Travelling) |
+
+For receipts sent via Telegram, Google Gemini reads the receipt and decides which type it is — a grocery/snack order or a proper meal. Blinkit and Swiggy Instamart invoices are always treated as snacks.
+
 ## Expense policy
 
 edgelake automatically applies expense policy rules before filing. The thresholds are set during `edgelake setup` and can be changed anytime by running `edgelake setup` again.
@@ -223,7 +234,9 @@ All variables are set in a `.env` file at the project root. Run `edgelake setup`
 | `GEMINI_API_KEY` | — | API key from Google AI Studio |
 | `GEMINI_MODEL` | `gemini-2.0-flash` | Gemini model to use for receipt extraction |
 | `CHROMERIVER_URL` | `https://app.eu1.chromeriver.com/` | Your Chrome River instance URL |
-| `DEFAULT_CATEGORY` | `Meals - Chocolate/Dessert/Snacks` | Expense category for all line items |
+| `DEFAULT_CATEGORY` | `Meals - Chocolate/Dessert/Snacks` | Category for snack/grocery receipts |
+| `INDIVIDUAL_MEALS_CATEGORY` | `Individual Meals only (around Client Site or While Travelling)` | Category for restaurant/meal receipts |
+| `INDIVIDUAL_MEALS_TILE` | `mosaicMeals/IndividualMealsTile` | Chrome River `data-qa` selector for the individual meals sub-tile |
 | `DEFAULT_CURRENCY` | `INR` | Currency for all expenses |
 | `DEFAULT_LOCATION` | `India` | Location field in Chrome River |
 | `DEFAULT_PROJECT_CODE` | — | Project/billing code in Chrome River |

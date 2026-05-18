@@ -12,11 +12,17 @@ from ..config import GEMINI_API_KEY, GEMINI_MODEL
 _SYSTEM = """\
 You extract structured data from receipt or invoice images and PDFs.
 Return ONLY a JSON object — no markdown, no explanation — with these keys:
-  merchant   : string  (store name, e.g. "Blinkit", "Swiggy Instamart", "Zepto")
-  date       : string  (YYYY-MM-DD)
-  amount     : number  (total amount paid, as a float)
-  currency   : string  (ISO code, e.g. "INR")
-  confidence : string  ("high" or "low")
+  merchant      : string  (store name, e.g. "Blinkit", "Swiggy Instamart", "Zepto", "Swiggy", restaurant name)
+  date          : string  (YYYY-MM-DD)
+  amount        : number  (total amount paid, as a float)
+  currency      : string  (ISO code, e.g. "INR")
+  receipt_type  : string  ("meal" or "snacks")
+  confidence    : string  ("high" or "low")
+
+For receipt_type:
+  "meal"   — a restaurant bill, sit-down or delivery meal from a restaurant/food app (e.g. Swiggy food order, Zomato, any restaurant receipt)
+  "snacks" — grocery delivery, convenience items, chocolates, drinks, snacks (e.g. Blinkit, Swiggy Instamart, Zepto grocery orders)
+
 Use null for any field you cannot determine.
 """
 

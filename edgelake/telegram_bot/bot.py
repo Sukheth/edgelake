@@ -78,6 +78,7 @@ async def _process(update: Update, tmp_path: Path, suffix: str) -> None:
         raw_date = fields.get("date")
         amount = fields.get("amount")
         currency = fields.get("currency") or "INR"
+        receipt_type = fields.get("receipt_type") or "snacks"
         confidence = fields.get("confidence") or "low"
 
         date_obj = _parse_date(raw_date)
@@ -106,6 +107,7 @@ async def _process(update: Update, tmp_path: Path, suffix: str) -> None:
                 merchant=merchant,
                 date=date_str,
                 currency=currency,
+                receipt_type=receipt_type,
             )
             ledger_status = "parsed"
         else:
@@ -116,6 +118,7 @@ async def _process(update: Update, tmp_path: Path, suffix: str) -> None:
             f"  Merchant : {merchant}",
             f"  Date     : {date_str or '—'}",
             f"  Amount   : {currency} {amount:.2f}" if amount else "  Amount   : —",
+            f"  Type     : {receipt_type}",
             f"  Status   : {ledger_status}",
             f"  Order ID : {order_id}",
             "",

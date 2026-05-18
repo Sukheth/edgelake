@@ -17,6 +17,7 @@ class Receipt:
     currency: str
     raw_text: str
     source_path: Path
+    receipt_type: str = "snacks"  # "snacks" or "meal"; overridden by Gemini for Telegram receipts
 
 
 MERCHANT_PATTERNS = [

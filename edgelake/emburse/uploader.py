@@ -8,7 +8,7 @@ from pathlib import Path
 from playwright.sync_api import Page
 from rich.console import Console
 
-from ..config import DEBUG_DIR, DEFAULT_CATEGORY, DEFAULT_LOCATION, DEFAULT_PROJECT_CODE
+from ..config import DEBUG_DIR, DEFAULT_CATEGORY, DEFAULT_LOCATION, DEFAULT_PROJECT_CODE, INDIVIDUAL_MEALS_TILE
 from ..parsers.pdf import Receipt
 
 console = Console()
@@ -253,7 +253,12 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
     # River's stable automation hook; if it isn't there we WANT to fail
     # loudly rather than risk clicking a breadcrumb or stale tile.
     tile_selectors = ['[data-qa~="mosaicMeals/EntertainmentDrawer"]']
-    drinks_selectors = ['[data-qa~="mosaicMeals/DrinksTile"]']
+    is_meal = getattr(receipt, "receipt_type", "snacks") == "meal"
+    drinks_selectors = (
+        [f'[data-qa~="{INDIVIDUAL_MEALS_TILE}"]']
+        if is_meal
+        else ['[data-qa~="mosaicMeals/DrinksTile"]']
+    )
 
     # Universal entry: PROBE FIRST, don't touch URL if picker is already open.
     #

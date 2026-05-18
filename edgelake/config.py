@@ -10,6 +10,10 @@ load_dotenv(ROOT / ".env")
 
 CHROMERIVER_URL = os.getenv("CHROMERIVER_URL", "https://app.eu1.chromeriver.com/")
 DEFAULT_CATEGORY = os.getenv("DEFAULT_CATEGORY", "Meals - Chocolate/Dessert/Snacks")
+INDIVIDUAL_MEALS_CATEGORY = os.getenv("INDIVIDUAL_MEALS_CATEGORY", "Individual Meals only (around Client Site or While Travelling)")
+# data-qa selector for the Individual Meals sub-tile inside the Meals/Entertainment drawer.
+# Inspect your Chrome River UI to find the correct value.
+INDIVIDUAL_MEALS_TILE = os.getenv("INDIVIDUAL_MEALS_TILE", "mosaicMeals/IndividualMealsTile")
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "INR")
 # Reused across every line item in a run. Set these in .env.
 DEFAULT_LOCATION = os.getenv("DEFAULT_LOCATION", "India")

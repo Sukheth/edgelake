@@ -39,6 +39,7 @@ def _conn() -> sqlite3.Connection:
             pdf_amount      REAL,
             chosen_amount   REAL,
             amount_source   TEXT,
+            receipt_type    TEXT DEFAULT 'snacks',
             status          TEXT NOT NULL,
             draft_url       TEXT,
             created_at      TEXT NOT NULL,
@@ -48,6 +49,10 @@ def _conn() -> sqlite3.Connection:
     )
     conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_sha ON receipts(sha256)")
     conn.execute("CREATE INDEX IF NOT EXISTS idx_receipts_status ON receipts(status)")
+    try:
+        conn.execute("ALTER TABLE receipts ADD COLUMN receipt_type TEXT DEFAULT 'snacks'")
+    except Exception:
+        pass  # column already exists
     conn.execute(
         """
         CREATE TABLE IF NOT EXISTS fetch_state (
@@ -147,6 +152,7 @@ def set_parsed(
     merchant: str | None,
     date: str | None,
     currency: str | None,
+    receipt_type: str | None = None,
 ) -> None:
     """Mark a row as parsed. Does not advance from later statuses."""
     now = _now()
@@ -154,15 +160,16 @@ def set_parsed(
         conn.execute(
             """
             UPDATE receipts
-            SET pdf_amount = ?,
-                merchant   = COALESCE(?, merchant),
-                date       = COALESCE(?, date),
-                currency   = COALESCE(?, currency),
-                status     = CASE WHEN status = 'fetched' THEN 'parsed' ELSE status END,
-                updated_at = ?
+            SET pdf_amount    = ?,
+                merchant      = COALESCE(?, merchant),
+                date          = COALESCE(?, date),
+                currency      = COALESCE(?, currency),
+                receipt_type  = COALESCE(?, receipt_type),
+                status        = CASE WHEN status = 'fetched' THEN 'parsed' ELSE status END,
+                updated_at    = ?
             WHERE order_id = ?
             """,
-            (pdf_amount, merchant, date, currency, now, order_id),
+            (pdf_amount, merchant, date, currency, receipt_type, now, order_id),
         )
 
 
