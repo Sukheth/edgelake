@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="edgelake.png" alt="edgelake" width="200" />
+  <img src="edgelake.png" alt="edgelake" width="480" />
 </p>
 
 # edgelake
