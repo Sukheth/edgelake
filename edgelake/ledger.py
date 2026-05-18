@@ -10,11 +10,13 @@ from .config import LEDGER_PATH, INBOX, PROCESSED, FAILED
 
 
 # Status lifecycle for a receipts row:
-#   fetched   -> just downloaded, listing_amount populated, no pdf parse yet
-#   parsed    -> pdf_amount populated; ready for verify
-#   verified  -> chosen_amount + amount_source set; ready for rename + upload
-#   skipped   -> user opted to skip during verify; never drafted
-#   drafted   -> Chrome River draft created
+#   fetched        -> just downloaded, listing_amount populated, no pdf parse yet
+#   parsed         -> pdf_amount populated; ready for verify
+#   verified       -> chosen_amount + amount_source set; ready for rename + upload
+#   skipped        -> user opted to skip during verify; never drafted
+#   needs_approval -> amount exceeded policy threshold; moved to needs-approval/
+#   drafted        -> Chrome River draft created
+#   failed         -> Gemini extraction failed or returned null fields; moved to failed/
 #
 # order_id is the canonical identity (Blinkit ORD<digits>). For files without
 # a real order_id we synthesize one from the suggested filename or sha.
