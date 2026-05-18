@@ -1,6 +1,13 @@
 from __future__ import annotations
 
+import ssl
 import tempfile
+
+try:
+    import truststore
+    truststore.inject_into_ssl()
+except ImportError:
+    pass
 from datetime import datetime, date as _Date
 from pathlib import Path
 
@@ -138,9 +145,13 @@ def run_bot(token: str | None = None) -> None:
         raise RuntimeError(
             "TELEGRAM_BOT_TOKEN not set. Add it to .env or pass via --token."
         )
-    app = Application.builder().token(tok).build()
+    async def _on_startup(application: Application) -> None:
+        me = await application.bot.get_me()
+        print(f"Bot ready: @{me.username} (id={me.id}) — send a receipt to start.")
+
+    app = Application.builder().token(tok).post_init(_on_startup).build()
     app.add_handler(CommandHandler("start", _cmd_start))
     app.add_handler(CommandHandler("help", _cmd_start))
     app.add_handler(MessageHandler(filters.PHOTO, _handle_photo))
     app.add_handler(MessageHandler(filters.Document.ALL, _handle_document))
-    app.run_polling(drop_pending_updates=True)
+    app.run_polling(drop_pending_updates=False)
