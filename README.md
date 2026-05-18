@@ -134,12 +134,12 @@ The free tier includes 1,500 requests/day and 1 million tokens/minute on Gemini 
 
 edgelake automatically picks the right Chrome River expense category for each receipt:
 
-| Receipt type | Chrome River category |
-|---|---|
-| Grocery delivery / snacks (Blinkit, Swiggy Instamart, Zepto) | Meals - Chocolate/Dessert/Snacks |
-| Restaurant meal / food delivery (Swiggy food, Zomato, any restaurant bill) | Individual Meals only (around Client Site or While Travelling) |
+| Receipt type | Chrome River category | Approval threshold |
+|---|---|---|
+| Grocery delivery / snacks (Blinkit, Swiggy Instamart, Zepto) | Meals - Chocolate/Dessert/Snacks | ₹1,100 |
+| Restaurant meal / food delivery (Swiggy food, Zomato, any restaurant bill) | Individual Meals only (around Client Site or While Travelling) | ₹3,000 |
 
-For receipts sent via Telegram, Google Gemini reads the receipt and decides which type it is — a grocery/snack order or a proper meal. Blinkit and Swiggy Instamart invoices are always treated as snacks.
+For receipts sent via Telegram, Google Gemini reads the receipt and decides which type it is — a grocery/snack order or a proper meal. Blinkit invoices are always treated as snacks.
 
 ## Expense policy
 
@@ -147,11 +147,20 @@ edgelake automatically applies expense policy rules before filing. The threshold
 
 The defaults are:
 
+**Snacks (Blinkit, Instamart, etc.):**
+
 | Amount | What happens |
 |---|---|
 | ₹1,000 or less | Filed at the exact amount |
 | ₹1,001 – ₹1,099 | Capped to ₹1,000 automatically |
 | ₹1,100 or more | **Not filed** — moved to `receipts/needs-approval/` for manual review |
+
+**Meals (restaurant bills):**
+
+| Amount | What happens |
+|---|---|
+| Under ₹3,000 | Filed at the exact amount |
+| ₹3,000 or more | **Not filed** — moved to `receipts/needs-approval/` for manual review |
 
 Receipts that exceed the approval threshold are never uploaded automatically. They sit in `receipts/needs-approval/` on your laptop until you handle them manually in Chrome River.
 
@@ -236,13 +245,13 @@ All variables are set in a `.env` file at the project root. Run `edgelake setup`
 | `CHROMERIVER_URL` | `https://app.eu1.chromeriver.com/` | Your Chrome River instance URL |
 | `DEFAULT_CATEGORY` | `Meals - Chocolate/Dessert/Snacks` | Category for snack/grocery receipts |
 | `INDIVIDUAL_MEALS_CATEGORY` | `Individual Meals only (around Client Site or While Travelling)` | Category for restaurant/meal receipts |
-| `INDIVIDUAL_MEALS_TILE` | `mosaicMeals/IndividualMealsTile` | Chrome River `data-qa` selector for the individual meals sub-tile |
 | `DEFAULT_CURRENCY` | `INR` | Currency for all expenses |
 | `DEFAULT_LOCATION` | `India` | Location field in Chrome River |
 | `DEFAULT_PROJECT_CODE` | — | Project/billing code in Chrome River |
 | `BLINKIT_URL` | `https://blinkit.com/account/orders` | Blinkit orders page URL |
-| `POLICY_EXACT_MAX` | `1000` | Amounts at or below this are filed exactly |
-| `POLICY_APPROVAL_MIN` | `1100` | Amounts at or above this are held for manual review |
+| `POLICY_EXACT_MAX` | `1000` | Snacks: amounts at or below this are filed exactly |
+| `POLICY_APPROVAL_MIN` | `1100` | Snacks: amounts at or above this are held for manual review |
+| `POLICY_MEAL_APPROVAL_MIN` | `3000` | Meals: amounts at or above this are held for manual review |
 
 ### Persistent browser sessions
 

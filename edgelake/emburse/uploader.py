@@ -8,7 +8,7 @@ from pathlib import Path
 from playwright.sync_api import Page
 from rich.console import Console
 
-from ..config import DEBUG_DIR, DEFAULT_CATEGORY, DEFAULT_LOCATION, DEFAULT_PROJECT_CODE, INDIVIDUAL_MEALS_TILE
+from ..config import DEBUG_DIR, DEFAULT_LOCATION, DEFAULT_PROJECT_CODE, INDIVIDUAL_MEALS_CATEGORY
 from ..parsers.pdf import Receipt
 
 console = Console()
@@ -253,12 +253,7 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
     # River's stable automation hook; if it isn't there we WANT to fail
     # loudly rather than risk clicking a breadcrumb or stale tile.
     tile_selectors = ['[data-qa~="mosaicMeals/EntertainmentDrawer"]']
-    is_meal = getattr(receipt, "receipt_type", "snacks") == "meal"
-    drinks_selectors = (
-        [f'[data-qa~="{INDIVIDUAL_MEALS_TILE}"]']
-        if is_meal
-        else ['[data-qa~="mosaicMeals/DrinksTile"]']
-    )
+    drinks_selectors = ['[data-qa~="mosaicMeals/DrinksTile"]']
 
     # Universal entry: PROBE FIRST, don't touch URL if picker is already open.
     #
@@ -486,14 +481,24 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
 
     page.wait_for_timeout(400)
 
-    # --- Type of Meal (name=TypeFoodBeverage) → Chocolate/Dessert/Snacks ---
+    # --- Type of Meal (name=TypeFoodBeverage) ---
+    is_meal = getattr(receipt, "receipt_type", "snacks") == "meal"
+    if is_meal:
+        meal_type_search = "Individual Meals"
+        meal_type_label = INDIVIDUAL_MEALS_CATEGORY
+    else:
+        meal_type_search = "Chocolate"
+        meal_type_label = "Chocolate/Dessert/Snacks"
     try:
         loc = page.locator('input[name="TypeFoodBeverage"]').first
         loc.click(timeout=4000)
-        loc.fill("Chocolate", timeout=4000)
+        loc.fill(meal_type_search, timeout=4000)
         page.wait_for_timeout(800)
-        page.locator('[role="option"]:has-text("Chocolate"), li:has-text("Chocolate"):visible').first.click(timeout=5000)
-        console.print("[green]  set Type of Meal: Chocolate/Dessert/Snacks[/green]")
+        page.locator(
+            f'[role="option"]:has-text("{meal_type_search}"), '
+            f'li:has-text("{meal_type_search}"):visible'
+        ).first.click(timeout=5000)
+        console.print(f"[green]  set Type of Meal: {meal_type_label}[/green]")
     except Exception as e:
         console.print(f"[yellow]  could not set Type of Meal: {e}[/yellow]")
 

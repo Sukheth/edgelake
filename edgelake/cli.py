@@ -12,6 +12,7 @@ from .config import (
     NEEDS_APPROVAL,
     POLICY_APPROVAL_MIN,
     POLICY_EXACT_MAX,
+    POLICY_MEAL_APPROVAL_MIN,
     PROCESSED,
 )
 from .emburse.session import chromeriver_session
@@ -58,15 +59,17 @@ def _amount_str(v: float | None) -> str:
     return f"Rs.{v:.2f}" if v is not None else "—"
 
 
-def _apply_policy(raw_amount: float) -> tuple[float, str]:
+def _apply_policy(raw_amount: float, receipt_type: str = "snacks") -> tuple[float, str]:
     """Apply the expense policy to a raw chosen amount.
 
-    Returns (final_amount, policy_tag) where policy_tag is one of:
-      'exact'         — amount <= POLICY_EXACT_MAX, used as-is
-      'capped'        — POLICY_EXACT_MAX < amount < POLICY_APPROVAL_MIN,
-                        capped to POLICY_EXACT_MAX before upload
-      'needs_approval'— amount >= POLICY_APPROVAL_MIN, do not auto-upload
+    For snacks: amounts > POLICY_EXACT_MAX are capped; >= POLICY_APPROVAL_MIN need approval.
+    For meals:  amounts >= POLICY_MEAL_APPROVAL_MIN need approval; otherwise filed at exact amount.
     """
+    if receipt_type == "meal":
+        if raw_amount >= POLICY_MEAL_APPROVAL_MIN:
+            return raw_amount, "needs_approval"
+        return raw_amount, "exact"
+    # snacks (default)
     if raw_amount >= POLICY_APPROVAL_MIN:
         return raw_amount, "needs_approval"
     if raw_amount > POLICY_EXACT_MAX:
@@ -99,16 +102,18 @@ def _move_to_needs_approval(filename: str) -> str | None:
         return None
 
 
-def _commit_decision(order_id: str, raw_amount: float, source: str, filename: str | None) -> str:
+def _commit_decision(order_id: str, raw_amount: float, source: str, filename: str | None,
+                     receipt_type: str = "snacks") -> str:
     """Apply policy + persist the decision. Returns the resulting status."""
-    final_amount, tag = _apply_policy(raw_amount)
+    final_amount, tag = _apply_policy(raw_amount, receipt_type)
     if tag == "needs_approval":
         moved = _move_to_needs_approval(filename) if filename else None
         if moved and moved != filename:
             set_filename(order_id, moved)
         set_needs_approval(order_id, chosen_amount=raw_amount, amount_source=source)
+        threshold = POLICY_MEAL_APPROVAL_MIN if receipt_type == "meal" else POLICY_APPROVAL_MIN
         console.print(
-            f"[bold yellow]  {order_id}: Rs.{raw_amount:.2f} >= Rs.{POLICY_APPROVAL_MIN:.0f} "
+            f"[bold yellow]  {order_id}: Rs.{raw_amount:.2f} >= Rs.{threshold:.0f} "
             f"-> NEEDS APPROVAL, moved to needs-approval/[/bold yellow]"
         )
         return "needs_approval"
@@ -201,6 +206,7 @@ def verify(auto: bool) -> None:
             raw_amount=row["pdf_amount"],
             source="match",
             filename=row.get("filename"),
+            receipt_type=row.get("receipt_type") or "snacks",
         )
         if result == "needs_approval":
             auto_approval += 1
@@ -278,6 +284,7 @@ def verify(auto: bool) -> None:
                 raw_amount=raw,
                 source=choice,
                 filename=row.get("filename"),
+                receipt_type=row.get("receipt_type") or "snacks",
             )
         resolved[choice] += 1
 
@@ -391,6 +398,7 @@ def _row_to_receipt(row: dict, path: Path) -> Receipt | None:
         currency=currency,
         raw_text="",
         source_path=path,
+        receipt_type=row.get("receipt_type") or "snacks",
     )
 
 
@@ -756,8 +764,9 @@ def setup() -> None:
     proj  = ask("DEFAULT_PROJECT_CODE", "Default project code")
 
     console.print("\n  [dim]Expense policy thresholds (amounts in your default currency)[/dim]")
-    exact_max     = ask("POLICY_EXACT_MAX",    "Max amount filed at exact value (e.g. 1000)")
-    approval_min  = ask("POLICY_APPROVAL_MIN", "Amount that triggers manual approval (e.g. 1100)")
+    exact_max          = ask("POLICY_EXACT_MAX",          "Snacks: max amount filed at exact value (e.g. 1000)")
+    approval_min       = ask("POLICY_APPROVAL_MIN",       "Snacks: amount that triggers manual approval (e.g. 1100)")
+    meal_approval_min  = ask("POLICY_MEAL_APPROVAL_MIN",  "Meals: amount that triggers manual approval (e.g. 3000)")
 
     lines = [
         f"TELEGRAM_BOT_TOKEN={tg}",
@@ -771,6 +780,7 @@ def setup() -> None:
         f"BLINKIT_URL={existing.get('BLINKIT_URL', 'https://blinkit.com/account/orders')}",
         f"POLICY_EXACT_MAX={exact_max or '1000'}",
         f"POLICY_APPROVAL_MIN={approval_min or '1100'}",
+        f"POLICY_MEAL_APPROVAL_MIN={meal_approval_min or '3000'}",
     ]
     env_path.write_text("\n".join(lines) + "\n")
     console.print(f"\n[green]Wrote {env_path}[/green]")

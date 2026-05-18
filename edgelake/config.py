@@ -11,9 +11,6 @@ load_dotenv(ROOT / ".env")
 CHROMERIVER_URL = os.getenv("CHROMERIVER_URL", "https://app.eu1.chromeriver.com/")
 DEFAULT_CATEGORY = os.getenv("DEFAULT_CATEGORY", "Meals - Chocolate/Dessert/Snacks")
 INDIVIDUAL_MEALS_CATEGORY = os.getenv("INDIVIDUAL_MEALS_CATEGORY", "Individual Meals only (around Client Site or While Travelling)")
-# data-qa selector for the Individual Meals sub-tile inside the Meals/Entertainment drawer.
-# Inspect your Chrome River UI to find the correct value.
-INDIVIDUAL_MEALS_TILE = os.getenv("INDIVIDUAL_MEALS_TILE", "mosaicMeals/IndividualMealsTile")
 DEFAULT_CURRENCY = os.getenv("DEFAULT_CURRENCY", "INR")
 # Reused across every line item in a run. Set these in .env.
 DEFAULT_LOCATION = os.getenv("DEFAULT_LOCATION", "India")
@@ -36,6 +33,8 @@ NEEDS_APPROVAL = ROOT / "receipts" / "needs-approval"
 #   amount >= POLICY_APPROVAL_MIN         -> needs human approval, do not upload
 POLICY_EXACT_MAX = float(os.getenv("POLICY_EXACT_MAX", "1000"))
 POLICY_APPROVAL_MIN = float(os.getenv("POLICY_APPROVAL_MIN", "1100"))
+# Meal receipts (restaurant bills) have a higher approval threshold.
+POLICY_MEAL_APPROVAL_MIN = float(os.getenv("POLICY_MEAL_APPROVAL_MIN", "3000"))
 PROFILE_DIR = ROOT / ".playwright-profiles" / "chromeriver"
 BLINKIT_PROFILE_DIR = ROOT / ".playwright-profiles" / "blinkit"
 DEBUG_DIR = ROOT / "debug"
