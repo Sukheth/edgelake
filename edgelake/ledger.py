@@ -6,7 +6,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Iterable
 
-from .config import LEDGER_PATH, INBOX, PROCESSED
+from .config import LEDGER_PATH, INBOX, PROCESSED, FAILED
 
 
 # Status lifecycle for a receipts row:
@@ -18,7 +18,7 @@ from .config import LEDGER_PATH, INBOX, PROCESSED
 #
 # order_id is the canonical identity (Blinkit ORD<digits>). For files without
 # a real order_id we synthesize one from the suggested filename or sha.
-STATUSES = ("fetched", "parsed", "verified", "skipped", "needs_approval", "drafted")
+STATUSES = ("fetched", "parsed", "verified", "skipped", "needs_approval", "drafted", "failed")
 
 
 def _conn() -> sqlite3.Connection:
@@ -195,6 +195,15 @@ def set_skipped(order_id: str) -> None:
     with _conn() as conn:
         conn.execute(
             "UPDATE receipts SET status = 'skipped', updated_at = ? WHERE order_id = ?",
+            (now, order_id),
+        )
+
+
+def set_failed(order_id: str) -> None:
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE receipts SET status = 'failed', updated_at = ? WHERE order_id = ?",
             (now, order_id),
         )
 
@@ -381,11 +390,12 @@ def reconcile_inbox(verbose: bool = False) -> dict:
     }
     INBOX.mkdir(parents=True, exist_ok=True)
     PROCESSED.mkdir(parents=True, exist_ok=True)
+    FAILED.mkdir(parents=True, exist_ok=True)
 
     # Build a quick lookup of every file on disk.
     on_disk: dict[str, Path] = {}
-    for d in (INBOX, PROCESSED):
-        for p in d.glob("*.pdf"):
+    for d in (INBOX, PROCESSED, FAILED):
+        for p in d.glob("*"):
             on_disk[p.name] = p
 
     known_ids = known_order_ids()

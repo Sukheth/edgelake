@@ -26,6 +26,7 @@ GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
 INBOX = ROOT / "receipts" / "inbox"
 PROCESSED = ROOT / "receipts" / "processed"
 NEEDS_APPROVAL = ROOT / "receipts" / "needs-approval"
+FAILED = ROOT / "receipts" / "failed"
 
 # Expense policy thresholds (INR).
 #   amount <= POLICY_EXACT_MAX            -> use exact amount
