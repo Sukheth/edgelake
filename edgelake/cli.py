@@ -419,6 +419,7 @@ def upload(dry_run: bool) -> None:
             "needs_approval": len(list_by_status("needs_approval")),
             "skipped": len(list_by_status("skipped")),
             "drafted": len(list_by_status("drafted")),
+            "failed": len(list_by_status("failed")),
         }
         nonzero = {k: v for k, v in snapshot.items() if v}
         if nonzero:
@@ -520,7 +521,7 @@ def reconcile(verbose: bool) -> None:
             console.print(f"  {r['order_id']}  {r['filename']}  status={r['status']}")
     # Quick status snapshot.
     by_status = {}
-    for st in ("fetched", "parsed", "verified", "skipped", "drafted"):
+    for st in ("fetched", "parsed", "verified", "skipped", "needs_approval", "drafted", "failed"):
         n = len(list_by_status(st))
         if n:
             by_status[st] = n
@@ -711,7 +712,7 @@ def run(ctx: click.Context, merchant: str, since: str | None, resume: bool,
     # Final snapshot.
     console.print("\n[bold green]== Run complete ==[/bold green]")
     snapshot = {}
-    for st in ("fetched", "parsed", "verified", "skipped", "needs_approval", "drafted"):
+    for st in ("fetched", "parsed", "verified", "skipped", "needs_approval", "drafted", "failed"):
         n = len(list_by_status(st))
         if n:
             snapshot[st] = n

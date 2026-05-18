@@ -197,7 +197,7 @@ This section is for developers or people who want to understand how edgelake wor
 
 | Stage | What it does | Ledger status |
 |---|---|---|
-| **telegram** | Bot receives receipt photo/PDF, calls Gemini to extract fields, saves to `inbox/` | `parsed` |
+| **telegram** | Bot receives receipt photo/PDF, calls Gemini to extract fields (3 retries), saves to `inbox/` or `failed/` | `parsed` / `failed` |
 | **fetch** | Drives Blinkit in a real browser, downloads invoice PDFs into `receipts/inbox/` | `fetched` |
 | **reconcile** | SHA-256 hashes every PDF in `inbox/` and `processed/`, indexes in ledger | `fetched` |
 | **parse-pending** | Extracts amount + date from each PDF using pdfplumber | `parsed` |
@@ -226,6 +226,7 @@ receipts/
   inbox/                  # Incoming PDFs waiting to be filed
   processed/              # Successfully uploaded receipts
   needs-approval/         # Over policy threshold, awaiting manual review
+  failed/                 # Gemini couldn't extract fields after 3 attempts
 .playwright-profiles/
   chromeriver/            # Saved Okta/SAML session
   blinkit/                # Saved phone OTP session
