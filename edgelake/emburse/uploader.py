@@ -30,6 +30,20 @@ def _step(label: str, indent: int = 2):
         console.print(f"{pad}[{color}]< {label} ({elapsed:.2f}s)[/{color}]")
 
 
+def _wait_for_loader(page: Page, timeout_ms: int = 15000) -> bool:
+    """Wait for Chrome River's AJAX loader overlay to disappear. The loader
+    div ([data-qa="appAjaxLoader"]) intercepts pointer events and silently
+    breaks clicks — e.g. fields appear interactive but actually aren't.
+    Returns True if the loader is gone (or never appeared)."""
+    try:
+        page.locator('[data-qa="appAjaxLoader"]').first.wait_for(
+            state="hidden", timeout=timeout_ms
+        )
+        return True
+    except Exception:
+        return False
+
+
 def _is_visible(page: Page, selector: str, timeout_ms: int = 200) -> bool:
     """Cheap visibility probe used by _page_state."""
     try:
@@ -241,94 +255,93 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
     tile_selectors = ['[data-qa~="mosaicMeals/EntertainmentDrawer"]']
     drinks_selectors = ['[data-qa~="mosaicMeals/DrinksTile"]']
 
-    # Universal entry probe: regardless of idx, find whichever entry
-    # control is on screen and use it. Priority:
-    #   1. MEALS tile directly visible -> skip preamble (handled below).
-    #   2. 'Create New' visible -> click it.
-    #   3. 'Add New Expense' (+) visible -> click it.
-    # On a line-item detail view (URL contains /lineitem/<uuid>), the '+'
-    # navigates to ANOTHER line-item view instead of opening the picker.
-    # So if we detect that URL pattern, strip back to the report-detail
-    # view BEFORE probing for entry controls.
+    # Universal entry: PROBE FIRST, don't touch URL if picker is already open.
+    #
+    # Empirical Chrome River behavior after saving a line item: the URL may
+    # still contain /lineitem/<uuid>, but the right pane already re-renders
+    # to show the "Add Expenses → Create New" tile picker, with the tiles
+    # FULLY INTERACTIVE. So URL-strip is destructive — it navigates away
+    # from the live picker.
+    #
+    # Priority:
+    #   1. MEALS tile already visible+interactive -> click it directly.
+    #   2. "Create New" rail item visible -> click it (refreshes the picker).
+    #   3. '+' button visible -> click it (opens a fresh picker).
+    #   4. Nothing visible -> last-resort URL strip + '+'.
     with _step(f"entry into form (idx={idx})"):
-        on_lineitem_view = False
-        try:
-            cur = page.url
-            if "/lineitem/" in cur:
-                on_lineitem_view = True
-                new_url = cur.split("/lineitem/")[0]
-                console.print(f"[dim]    on lineitem view, stripping to:[/dim] {new_url}")
-                page.goto(new_url, wait_until="domcontentloaded", timeout=8000)
-                page.wait_for_timeout(800)
-        except Exception as e:
-            console.print(f"[yellow]    URL strip failed: {e}[/yellow]")
-
-        # '+' button: canonical data-qa, no fallbacks.
         plus_selectors = ['[data-qa="addExpenseBtn"]:visible']
 
-        def _entry_attempt(force_plus: bool = False) -> str:
-            """Returns 'tile' / 'create_new' / 'plus' / 'none'.
+        # Step 1: is the MEALS tile already there and interactive?
+        # If yes, we skip clicking any preamble — the picker is live.
+        meals_already_visible = False
+        try:
+            loc = page.locator(tile_selectors[0]).first
+            if loc.is_visible(timeout=500):
+                # Make sure it's actually interactive, not a stale ghost.
+                try:
+                    bbox = loc.bounding_box(timeout=300)
+                    if bbox and bbox["width"] > 5 and bbox["height"] > 5:
+                        meals_already_visible = True
+                except Exception:
+                    meals_already_visible = True
+        except Exception:
+            pass
 
-            When force_plus is True we always click '+' (skipping the tile
-            and Create-New probes). Used post-URL-strip where stale tile
-            elements may still be in the DOM and confuse the visibility
-            probe — we know we need to open the picker fresh."""
-            if not force_plus:
-                for sel in tile_selectors:
+        if meals_already_visible:
+            console.print("[green]    MEALS tile already visible — picker is live[/green]")
+        else:
+            # Step 2: try Create New (the rail item that refreshes the picker).
+            clicked = False
+            try:
+                cn = page.locator('text="Create New"').first
+                if cn.is_visible(timeout=500):
+                    cn.click(timeout=3000)
+                    console.print("[green]    clicked Create New[/green]")
+                    clicked = True
+            except Exception:
+                pass
+
+            # Step 3: try '+' button.
+            if not clicked:
+                for sel in plus_selectors:
                     try:
                         loc = page.locator(sel)
-                        if loc.first.is_visible(timeout=300):
-                            # Only trust visibility if the tile is also
-                            # enabled (not a stale DOM artifact).
-                            try:
-                                if not loc.first.get_attribute("disabled", timeout=200):
-                                    return "tile"
-                            except Exception:
-                                return "tile"
+                        if loc.first.is_visible(timeout=500):
+                            loc.first.click(timeout=3000)
+                            console.print(f"[green]    clicked '+' via:[/green] {sel}")
+                            clicked = True
+                            break
                     except Exception:
                         continue
-                try:
-                    if page.locator('text="Create New"').first.is_visible(timeout=300):
-                        page.locator('text="Create New"').first.click(timeout=3000)
-                        console.print("[green]    clicked Create New[/green]")
-                        return "create_new"
-                except Exception:
-                    pass
-            for sel in plus_selectors:
-                try:
-                    loc = page.locator(sel)
-                    if loc.first.is_visible(timeout=200):
-                        loc.first.click(timeout=3000)
-                        console.print(f"[green]    clicked '+' via:[/green] {sel}")
-                        return "plus"
-                except Exception:
-                    continue
-            return "none"
 
-        # If we just stripped a lineitem URL, force the '+' click — the
-        # picker isn't open after a URL goto, even though stale tile
-        # elements may still be in the DOM.
-        result = _entry_attempt(force_plus=on_lineitem_view)
-        console.print(f"    [dim]entry attempt 1: {result}[/dim]")
-        if result == "none":
-            # Try navigating back to the report root and probing again.
-            try:
-                cur = page.url
-                if "/lineitem/" in cur:
-                    new_url = cur.split("/lineitem/")[0]
-                    page.goto(new_url, wait_until="domcontentloaded", timeout=8000)
-                    console.print(f"[green]    fell back to URL strip:[/green] {new_url}")
-                    page.wait_for_timeout(800)
-                    result = _entry_attempt()
-                    console.print(f"    [dim]entry attempt 2: {result}[/dim]")
-            except Exception as e:
-                console.print(f"[yellow]    URL strip failed: {e}[/yellow]")
-        if result == "none":
-            _page_state(page, f"no entry control found (idx={idx})")
-            _snap(page, f"99_entry_not_found_{idx}")
-            return False
-        # If we clicked Create New or '+', wait for the tile picker.
-        if result in ("create_new", "plus"):
+            # Step 4: last-resort URL strip + '+'.
+            if not clicked:
+                try:
+                    cur = page.url
+                    if "/lineitem/" in cur:
+                        new_url = cur.split("/lineitem/")[0]
+                        console.print(f"[dim]    last resort: URL strip to:[/dim] {new_url}")
+                        page.goto(new_url, wait_until="domcontentloaded", timeout=8000)
+                        page.wait_for_timeout(800)
+                        for sel in plus_selectors:
+                            try:
+                                loc = page.locator(sel)
+                                if loc.first.is_visible(timeout=1500):
+                                    loc.first.click(timeout=3000)
+                                    console.print(f"[green]    clicked '+' (post-strip) via:[/green] {sel}")
+                                    clicked = True
+                                    break
+                            except Exception:
+                                continue
+                except Exception as e:
+                    console.print(f"[yellow]    URL strip failed: {e}[/yellow]")
+
+            if not clicked:
+                _page_state(page, f"no entry control found (idx={idx})")
+                _snap(page, f"99_entry_not_found_{idx}")
+                return False
+
+            # Wait for the tile picker to be ready.
             try:
                 page.locator(tile_selectors[0]).first.wait_for(
                     state="visible", timeout=5000
@@ -386,35 +399,27 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
         _snap(page, f"99_meals_drinks_not_found_{idx}")
         return False
 
-    # Poll for the Date input. As soon as it's visible the form is ready;
-    # no need for an additional load-state wait or fixed sleep.
+    # Wait for the AJAX loader (form load triggered by Drinks click) to clear.
+    _wait_for_loader(page)
+    # Poll for the Date input becoming both visible AND editable. After
+    # clicking the Drinks sub-tile, Chrome River shows a loading overlay
+    # while Kendo widgets initialize — fields start disabled and flip to
+    # enabled when ready. Wait for the enabled state instead of bailing
+    # on the transient disabled state.
     form_ready = False
-    try:
-        page.locator('input[name="transactionDate"]').first.wait_for(
-            state="visible", timeout=5000
-        )
-        form_ready = True
-    except Exception:
-        page.wait_for_timeout(400)
-    # Sanity check: if the Date input is disabled/readonly we actually
-    # landed on a read-only line-item detail panel (because the MEALS tile
-    # selectors matched a breadcrumb title rather than a tile in the
-    # picker). Bail with a clear error so we don't silently fill stale data.
-    try:
-        date_input = page.locator('input[name="transactionDate"]').first
-        is_disabled = date_input.get_attribute("disabled", timeout=500)
-        is_readonly = date_input.get_attribute("readonly", timeout=500)
-        if is_disabled or is_readonly:
-            console.print(
-                f"[red]    Date input is disabled/readonly — we landed on a "
-                f"read-only view, not a fresh form. Likely the MEALS click "
-                f"matched a breadcrumb title.[/red]"
-            )
-            _page_state(page, f"stale read-only form (idx={idx})")
-            _snap(page, f"99_stale_form_{idx}")
-            return False
-    except Exception:
-        pass
+    deadline = time.monotonic() + 8.0
+    while time.monotonic() < deadline:
+        try:
+            loc = page.locator('input[name="transactionDate"]').first
+            if loc.is_visible(timeout=200):
+                disabled = loc.get_attribute("disabled", timeout=200)
+                readonly = loc.get_attribute("readonly", timeout=200)
+                if not disabled and not readonly:
+                    form_ready = True
+                    break
+        except Exception:
+            pass
+        page.wait_for_timeout(250)
     console.print(f"    [dim]expense form ready: {form_ready}[/dim]")
     _snap(page, f"04_expense_form_{idx}")
 
@@ -431,16 +436,35 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
     page.wait_for_timeout(400)
 
     # --- Fill Spent amount (name=amount) ---
+    # The AJAX loader can intercept clicks for several seconds after the
+    # Drinks-tile triggers form load. Wait, fill, then VERIFY — if the value
+    # is empty, the loader was intercepting during fill; retry up to 3x.
     amount_str = f"{receipt.amount:.2f}"
-    try:
-        loc = page.locator('input[name="amount"]').first
-        loc.click(click_count=3, timeout=4000)
-        loc.fill(amount_str, timeout=4000)
-        page.keyboard.press("Tab")
-        console.print(f"[green]  filled Spent:[/green] {amount_str}")
-    except Exception as e:
-        console.print(f"[yellow]  could not fill amount: {e}[/yellow]")
-    page.wait_for_timeout(400)
+    amount_ok = False
+    for attempt in range(3):
+        _wait_for_loader(page)
+        try:
+            loc = page.locator('input[name="amount"]').first
+            loc.click(click_count=3, timeout=5000)
+            loc.fill(amount_str, timeout=5000)
+            page.keyboard.press("Tab")
+            page.wait_for_timeout(300)
+            # Verify the value stuck. Chrome River reformats the value
+            # (e.g. "262.00" -> "262.00"), so we compare the numeric part.
+            actual = loc.input_value(timeout=1000)
+            if actual and actual.replace(",", "").strip() not in ("", "0", "0.00"):
+                console.print(f"[green]  filled Spent:[/green] {amount_str} (got: {actual})")
+                amount_ok = True
+                break
+            console.print(f"[yellow]  amount empty after fill (attempt {attempt+1}); retrying[/yellow]")
+        except Exception as e:
+            console.print(f"[yellow]  amount fill error (attempt {attempt+1}): {e}[/yellow]")
+        page.wait_for_timeout(500)
+    if not amount_ok:
+        console.print("[red]  FAILED to enter amount after 3 attempts — aborting line[/red]")
+        _snap(page, f"99_amount_blank_{idx}")
+        return False
+    page.wait_for_timeout(300)
 
     # --- Location (name=VATLocation, ComboBox) — value from DEFAULT_LOCATION ---
     try:
@@ -471,9 +495,10 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
     page.wait_for_timeout(400)
 
     # --- Project / Expense Code — value from DEFAULT_PROJECT_CODE ---
-    # Field name on the form is not yet pinned down; try common Chrome River
-    # patterns. Skip silently if empty so users who don't need it aren't blocked.
-    if DEFAULT_PROJECT_CODE:
+    # ONLY on the first line item. Chrome River auto-fills this from the
+    # previous line in the same report, so re-filling is just expensive
+    # noise. Skip it whenever idx > 0.
+    if DEFAULT_PROJECT_CODE and idx == 0:
         project_selectors = [
             'input[name="ProjectCode"]',
             'input[name="projectCode"]',
@@ -522,10 +547,64 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
         try:
             file_input = page.locator('input[type="file"][name="file"]')
             file_input.set_input_files(str(receipt.source_path), timeout=10000)
-            page.wait_for_timeout(2000)
             console.print(f"[green]    attached receipt:[/green] {receipt.source_path.name}")
         except Exception as e:
             console.print(f"[yellow]    could not attach receipt: {e}[/yellow]")
+
+    # Wait for the upload to complete. The visible signals are:
+    #   - The circular progress spinner (k-loading-image, or [data-qa
+    #     containing 'progress'/'spinner']) disappears.
+    #   - The Attachments section shows a thumbnail image / preview tile.
+    # We try a few selectors and accept whichever fires first. Cap at 45s
+    # for slow PDFs.
+    with _step(f"wait for PDF upload (idx={idx})"):
+        upload_done = False
+        deadline = time.monotonic() + 45.0
+        # Signals that the upload finished. Any one of these matching means
+        # we're safe to click Save.
+        done_selectors = [
+            'text=/Attachments\\s*\\(\\s*[1-9]\\d*\\s*\\)/',
+            '.attachments-section img:visible',
+            '.attachment-thumbnail:visible',
+            '[data-qa~="attachmentThumb"]:visible',
+            'img[src*="attachment"]:visible',
+        ]
+        # Signal that an upload is in progress. As long as ANY of these
+        # is visible, we keep waiting.
+        progress_selectors = [
+            '.k-loading-image:visible',
+            '.cr-loader:visible',
+            '[class*="progress"]:visible',
+            '[role="progressbar"]:visible',
+        ]
+        # First poll for any done-signal becoming true.
+        while time.monotonic() < deadline:
+            for sel in done_selectors:
+                try:
+                    if page.locator(sel).first.is_visible(timeout=200):
+                        upload_done = True
+                        break
+                except Exception:
+                    continue
+            if upload_done:
+                break
+            # Otherwise: if no progress indicator is visible AND we've
+            # waited at least 2s, assume the upload completed too fast to
+            # observe and move on.
+            any_progress = False
+            for sel in progress_selectors:
+                try:
+                    if page.locator(sel).first.is_visible(timeout=100):
+                        any_progress = True
+                        break
+                except Exception:
+                    continue
+            if not any_progress and (time.monotonic() - (deadline - 45.0)) > 2.0:
+                upload_done = True
+                console.print("    [dim]    no progress signal — assuming upload complete[/dim]")
+                break
+            page.wait_for_timeout(300)
+        console.print(f"    [dim]upload done: {upload_done}[/dim]")
 
     _snap(page, f"06_after_attach_{idx}")
 
@@ -533,10 +612,22 @@ def _add_expense_line(page: Page, receipt: Receipt, idx: int) -> bool:
     _page_state(page, f"pre-Save (idx={idx})")
 
     # --- Save the line item ---
+    # Wait for the AJAX loader from the PDF attach to clear before Save —
+    # otherwise the click is intercepted and the locator times out.
+    _wait_for_loader(page)
+    # Scope Save to the visible header-bar Save button. Chrome River has
+    # multiple "Save" texts in the DOM (mobile menus, hidden side panels);
+    # the actionable one is the primary button in the top-right header.
     with _step(f"save line item (idx={idx})"):
         if not _click_first(
             page,
-            ['button:has-text("Save"):visible', 'text=Save'],
+            [
+                'button.btn-primary:has-text("Save"):visible',
+                'button:has-text("Save"):visible',
+                'header button:has-text("Save")',
+                '[data-qa="saveBtn"]:visible',
+                'text=Save',
+            ],
             "Save line item",
         ):
             _snap(page, f"99_save_lineitem_not_found_{idx}")
