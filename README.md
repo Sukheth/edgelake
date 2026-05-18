@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="edgelake.png" alt="edgelake" width="200" />
+</p>
+
 # edgelake
 
 **Automatically file your grocery delivery receipts as expenses in Chrome River (Emburse Enterprise) — no manual data entry.**
