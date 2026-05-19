@@ -201,6 +201,17 @@ def set_skipped(order_id: str) -> None:
         )
 
 
+def update_date(order_id: str, date_str: str) -> None:
+    """Fill in or correct the date for a ledger row. Used by verify when the
+    user manually enters a missing date."""
+    now = _now()
+    with _conn() as conn:
+        conn.execute(
+            "UPDATE receipts SET date = ?, updated_at = ? WHERE order_id = ?",
+            (date_str, now, order_id),
+        )
+
+
 def set_failed(order_id: str) -> None:
     now = _now()
     with _conn() as conn:
