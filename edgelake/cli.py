@@ -32,6 +32,7 @@ from .ledger import (
     set_parsed,
     set_skipped,
     set_verified,
+    update_date,
 )
 from .parsers.pdf import Receipt, parse_pdf
 
@@ -67,7 +68,7 @@ def _apply_policy(raw_amount: float, receipt_type: str = "snacks") -> tuple[floa
     """
     if receipt_type == "meal":
         if raw_amount >= POLICY_MEAL_APPROVAL_MIN:
-            return raw_amount, "needs_approval"
+            return POLICY_MEAL_APPROVAL_MIN, "capped"
         return raw_amount, "exact"
     # snacks (default)
     if raw_amount >= POLICY_APPROVAL_MIN:
@@ -111,9 +112,8 @@ def _commit_decision(order_id: str, raw_amount: float, source: str, filename: st
         if moved and moved != filename:
             set_filename(order_id, moved)
         set_needs_approval(order_id, chosen_amount=raw_amount, amount_source=source)
-        threshold = POLICY_MEAL_APPROVAL_MIN if receipt_type == "meal" else POLICY_APPROVAL_MIN
         console.print(
-            f"[bold yellow]  {order_id}: Rs.{raw_amount:.2f} >= Rs.{threshold:.0f} "
+            f"[bold yellow]  {order_id}: Rs.{raw_amount:.2f} >= Rs.{POLICY_APPROVAL_MIN:.0f} "
             f"-> NEEDS APPROVAL, moved to needs-approval/[/bold yellow]"
         )
         return "needs_approval"
@@ -125,6 +125,50 @@ def _commit_decision(order_id: str, raw_amount: float, source: str, filename: st
         return "verified"
     set_verified(order_id, chosen_amount=final_amount, amount_source=source)
     return "verified"
+
+
+def _prompt_manual_amount(order_id: str) -> float | None:
+    """Prompt user for an amount when both listing and PDF amounts are missing.
+    Returns a positive float or None if the user chooses to skip."""
+    while True:
+        console.print(
+            f"[yellow]  {order_id}: amount missing — enter Rs amount (or S to skip):[/yellow] ",
+            end="",
+        )
+        try:
+            raw = input().strip()
+        except EOFError:
+            return None
+        if raw.upper() == "S":
+            return None
+        try:
+            val = float(raw.replace(",", ""))
+            if val > 0:
+                return val
+            console.print("[red]  Amount must be positive.[/red]")
+        except ValueError:
+            console.print("[red]  Enter a number (e.g. 450.00) or S to skip.[/red]")
+
+
+def _prompt_manual_date(order_id: str) -> str | None:
+    """Prompt user for a date when the ledger row has no date.
+    Returns an ISO date string (YYYY-MM-DD) or None if skipped."""
+    from datetime import datetime as _DT
+    while True:
+        console.print(
+            f"[yellow]  {order_id}: date missing — enter as DD-MM-YYYY (or S to skip):[/yellow] ",
+            end="",
+        )
+        try:
+            raw = input().strip()
+        except EOFError:
+            return None
+        if raw.upper() == "S":
+            return None
+        try:
+            return _DT.strptime(raw, "%d-%m-%Y").date().isoformat()
+        except ValueError:
+            console.print("[red]  Use DD-MM-YYYY format, e.g. 14-05-2026.[/red]")
 
 
 def _prompt_choice(order_id: str, listing: float | None, pdf: float | None) -> str:
@@ -190,7 +234,8 @@ def verify(auto: bool) -> None:
     for row in rows:
         listing = row.get("listing_amount")
         pdf = row.get("pdf_amount")
-        if listing is not None and pdf is not None and abs(listing - pdf) < 1.0:
+        date = row.get("date")
+        if listing is not None and pdf is not None and abs(listing - pdf) < 1.0 and date:
             auto_match.append(row)
         else:
             flagged.append(row)
@@ -235,21 +280,26 @@ def verify(auto: bool) -> None:
     for row in flagged:
         listing = row.get("listing_amount")
         pdf = row.get("pdf_amount")
+        date_col = row.get("date") or "[yellow]?[/yellow]"
+        reasons = []
         if listing is None and pdf is None:
-            why = "both missing"
+            reasons.append("amounts missing")
             diff = "—"
         elif listing is None:
-            why = "PDF only (no listing)"
+            reasons.append("PDF only")
             diff = "—"
         elif pdf is None:
-            why = "listing only (no PDF)"
+            reasons.append("listing only")
             diff = "—"
         else:
-            why = f"mismatch (>= Rs.1)"
+            reasons.append(f"mismatch Rs.{abs(listing - pdf):.2f}")
             diff = f"Rs.{abs(listing - pdf):.2f}"
+        if not row.get("date"):
+            reasons.append("date missing")
+        why = " + ".join(reasons)
         table.add_row(
             row["order_id"],
-            row.get("date") or "-",
+            date_col,
             _amount_str(listing),
             _amount_str(pdf),
             diff,
@@ -257,40 +307,66 @@ def verify(auto: bool) -> None:
         )
     console.print(table)
 
-    resolved = {"listing": 0, "pdf": 0, "skip": 0}
+    from datetime import date as _TodayDate
+    resolved = {"listing": 0, "pdf": 0, "manual": 0, "skip": 0}
     for row in flagged:
         listing = row.get("listing_amount")
         pdf = row.get("pdf_amount")
         order_id = row["order_id"]
+        missing_date = not row.get("date")
 
+        # --- Resolve amount ---
         if listing is None and pdf is None:
-            console.print(f"[yellow]  {order_id}: both amounts missing — skipping[/yellow]")
-            set_skipped(order_id)
-            resolved["skip"] += 1
-            continue
-
-        if auto:
-            # Unattended: prefer listing, fall back to PDF.
-            choice = "listing" if listing is not None else "pdf"
+            if auto:
+                console.print(f"[yellow]  {order_id}: amounts missing — skipping (auto)[/yellow]")
+                set_skipped(order_id)
+                resolved["skip"] += 1
+                continue
+            manual_amt = _prompt_manual_amount(order_id)
+            if manual_amt is None:
+                set_skipped(order_id)
+                resolved["skip"] += 1
+                continue
+            chosen_amount = manual_amt
+            chosen_source = "manual"
         else:
-            choice = _prompt_choice(order_id, listing, pdf)
+            if auto:
+                choice = "listing" if listing is not None else "pdf"
+            else:
+                choice = _prompt_choice(order_id, listing, pdf)
+            if choice == "skip":
+                set_skipped(order_id)
+                resolved["skip"] += 1
+                continue
+            chosen_amount = listing if choice == "listing" else pdf
+            chosen_source = choice
 
-        if choice == "skip":
-            set_skipped(order_id)
-        else:
-            raw = listing if choice == "listing" else pdf
-            _commit_decision(
-                order_id=order_id,
-                raw_amount=raw,
-                source=choice,
-                filename=row.get("filename"),
-                receipt_type=row.get("receipt_type") or "snacks",
-            )
-        resolved[choice] += 1
+        # --- Resolve date if missing ---
+        if missing_date:
+            if auto:
+                date_str = _TodayDate.today().isoformat()
+                console.print(f"[dim]  {order_id}: date missing — using today ({date_str})[/dim]")
+                update_date(order_id, date_str)
+            else:
+                date_str = _prompt_manual_date(order_id)
+                if not date_str:
+                    date_str = _TodayDate.today().isoformat()
+                    console.print(f"[dim]  {order_id}: no date entered — using today ({date_str})[/dim]")
+                update_date(order_id, date_str)
+
+        _commit_decision(
+            order_id=order_id,
+            raw_amount=chosen_amount,
+            source=chosen_source,
+            filename=row.get("filename"),
+            receipt_type=row.get("receipt_type") or "snacks",
+        )
+        resolved[chosen_source] += 1
 
     console.print(
         f"\n[cyan]Resolved {len(flagged)} flagged: "
-        f"listing={resolved['listing']}  pdf={resolved['pdf']}  skip={resolved['skip']}[/cyan]"
+        f"listing={resolved['listing']}  pdf={resolved['pdf']}  "
+        f"manual={resolved['manual']}  skip={resolved['skip']}[/cyan]"
     )
 
 
@@ -447,15 +523,6 @@ def upload(dry_run: bool) -> None:
 
     if not to_upload:
         console.print("[yellow]Nothing to upload after resolving files.[/yellow]")
-        return
-
-    # One report per merchant per run — keep the original guardrail.
-    merchants = {rc.merchant for _, _, rc in to_upload}
-    if len(merchants) > 1:
-        console.print(
-            f"[yellow]Verified receipts span multiple merchants ({merchants}). "
-            "Run separately for each — keep one merchant verified at a time.[/yellow]"
-        )
         return
 
     if dry_run:
