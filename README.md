@@ -6,7 +6,7 @@
 
 **Automatically file your food and grocery delivery receipts on Chrome River (Emburse Enterprise)**
 
-edgelake watches for your Blinkit invoices, reads the amounts and dates, and creates draft expense line items in Chrome River for you. You just review and submit. The tool never submits on your behalf. Instamart receipts are not yet autofetched and must be sent on telegram. 
+edgelake watches for your invoices, reads the amounts and dates, and creates draft expense line items in Chrome River for you. You just review and submit. The tool never submits on your behalf. Blinkit receipts are autofetched. Instamart receipts are not and must be sent on telegram. 
 
 ---
 
