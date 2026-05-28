@@ -917,6 +917,21 @@ def _process_one_order(page: Page, row: dict, dest_dir: Path, have: set[str]) ->
             console.print(f"[dim]  already have {extracted_id}, skipping[/dim]")
             return ""
 
+    # The default detail page is the order-tracking view; the Download Invoice
+    # control lives inside the "View order summary" expansion. Click it before
+    # the invoice search — discover() does the same.
+    for sel in (
+        'text="View order summary"',
+        'a:has-text("View order summary")',
+        'button:has-text("View order summary")',
+    ):
+        try:
+            page.locator(sel).first.click(timeout=2000)
+            page.wait_for_timeout(1200)
+            break
+        except Exception:
+            continue
+
     saved = _try_download_invoice(page, dest_dir, extracted_id or "unknown", have)
     if not saved:
         return None
