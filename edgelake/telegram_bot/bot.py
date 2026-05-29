@@ -73,20 +73,17 @@ async def _start_receipt_flow(
     update: Update, context: ContextTypes.DEFAULT_TYPE, tmp_path: Path, suffix: str
 ) -> int:
     """Dedup check and ask the user about overrides. Returns the next state."""
-    # Clean up any stale temp file from a previous abandoned conversation.
-    old = context.user_data.get("tmp_path")
-    if old:
-        Path(old).unlink(missing_ok=True)
-
     sha = hash_file(tmp_path)
     if sha in known_sha_set():
         await update.message.reply_text("Already queued — this receipt is in the ledger.")
         tmp_path.unlink(missing_ok=True)
-        return ConversationHandler.END
+        # If more receipts are queued, advance to the next one instead of stopping.
+        return await _drain_queue(update, context)
 
     ts = datetime.utcnow().strftime("%Y%m%d%H%M%S")
     order_id = f"TG{ts}_{sha[:6]}"
 
+    # Preserve any pending queue from previous receipts; only reset per-flow keys.
     context.user_data.update({
         "tmp_path": str(tmp_path),
         "suffix": suffix,
@@ -95,6 +92,7 @@ async def _start_receipt_flow(
         "override_amount": None,
         "override_date": None,
     })
+    context.user_data.setdefault("queue", [])
 
     await update.message.reply_text(
         "Receipt received!\n\n"
@@ -112,7 +110,7 @@ async def _got_override_choice(update: Update, context: ContextTypes.DEFAULT_TYP
         return _OVERRIDE_AMOUNT
     if text in ("n", "no"):
         await _finalize(update, context)
-        return ConversationHandler.END
+        return await _drain_queue(update, context)
     await update.message.reply_text("Please reply *Y* or *N*.", parse_mode="Markdown")
     return _OVERRIDE_CHOICE
 
@@ -146,7 +144,7 @@ async def _got_override_date(update: Update, context: ContextTypes.DEFAULT_TYPE)
         )
         return _OVERRIDE_DATE
     await _finalize(update, context)
-    return ConversationHandler.END
+    return await _drain_queue(update, context)
 
 
 async def _finalize(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -265,9 +263,53 @@ async def _cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     old = context.user_data.get("tmp_path")
     if old:
         Path(old).unlink(missing_ok=True)
+    # Discard queued receipts too — user explicitly cancelled.
+    for path_str, _suf in context.user_data.get("queue", []):
+        Path(path_str).unlink(missing_ok=True)
     context.user_data.clear()
     await update.message.reply_text("Cancelled. Send a receipt any time.")
     return ConversationHandler.END
+
+
+async def _drain_queue(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Called at the end of every Y/N flow. If receipts are queued, start the next
+    one's flow and return its state; else return END."""
+    queue = context.user_data.get("queue", [])
+    if not queue:
+        return ConversationHandler.END
+    path_str, suffix = queue.pop(0)
+    tmp_path = Path(path_str)
+    if not tmp_path.exists():
+        # Skip stale entries and try the next one.
+        return await _drain_queue(update, context)
+    return await _start_receipt_flow(update, context, tmp_path, suffix)
+
+
+async def _queue_receipt(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fallthrough handler that catches photos/docs while a conversation is active.
+    Downloads the file and appends it to context.user_data['queue']."""
+    if update.message.photo:
+        photo = update.message.photo[-1]
+        tg_file = await photo.get_file()
+        suffix = ".jpg"
+    else:
+        doc = update.message.document
+        fname = doc.file_name or "receipt"
+        suffix = Path(fname).suffix.lower()
+        if suffix not in _SUPPORTED_EXTENSIONS:
+            await update.message.reply_text(
+                f"Unsupported file type '{suffix}'. Send a PDF, JPEG, or PNG."
+            )
+            return
+        tg_file = await doc.get_file()
+    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+        tmp_path = Path(tmp.name)
+    await tg_file.download_to_drive(tmp_path)
+    queue = context.user_data.setdefault("queue", [])
+    queue.append((str(tmp_path), suffix))
+    await update.message.reply_text(
+        f"Queued (position {len(queue)}). Will process after current."
+    )
 
 
 def _parse_date(raw: str | None) -> _Date | None:
@@ -313,8 +355,14 @@ def run_bot(token: str | None = None) -> None:
             ],
         },
         fallbacks=[CommandHandler("cancel", _cancel)],
-        allow_reentry=True,   # new receipt always restarts the flow
+        allow_reentry=False,  # new receipts fall through to the queue handler
         conversation_timeout=300,  # 5 min to complete, then state discarded
     )
-    app.add_handler(conv)
+    app.add_handler(conv, group=0)
+    # Fallthrough: when a conversation is active, the current state only accepts
+    # TEXT replies, so a new PHOTO/Document falls through here and gets queued.
+    app.add_handler(
+        MessageHandler(filters.PHOTO | filters.Document.ALL, _queue_receipt),
+        group=1,
+    )
     app.run_polling(drop_pending_updates=False)
